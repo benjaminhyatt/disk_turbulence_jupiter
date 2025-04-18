@@ -1,0 +1,15 @@
+#!/bin/bash
+#SBATCH --account=b1094
+#SBATCH --partition=ciera-std
+#SBATCH --time=48:00:00
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=52
+#SBATCH --job-name=disk_turb
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=benjamin.hyatt@u.northwestern.edu
+source /home/bah2659/.bashrc
+d3
+#d3pub
+#mpiexec python3 disk_turb_march_2.py
+#mpiexec python3 disk_turb_run_debug.py
+mpiexec python3 disk_turb_run_debug_changeF.py
