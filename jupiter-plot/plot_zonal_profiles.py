@@ -35,7 +35,7 @@ def main(filename, start, count, output):
     plt.rcParams['font.size'] = 11
     plt.rcParams['figure.dpi'] = dpi
 
-    t_mar, b_mar, l_mar, r_mar = (0.2, 0.2, 0.2, 0.1)
+    t_mar, b_mar, l_mar, r_mar = (0.2, 0.2, 0.3, 0.1)
     golden_mean = (np.sqrt(5) - 1.) / 2.
     h_plot, w_plot = (1., 1. / golden_mean)
     h_pad = b_mar
@@ -69,6 +69,11 @@ def main(filename, start, count, output):
     ymin_vort = f['ymin_vort']
     ymax_vort = f['ymax_vort']
 
+    #print(ymin_u, ymax_u, ymin_vort, ymax_vort)
+    yabsmax_u = np.max(np.abs([ymin_u, ymax_u]))
+    yabsmax_vort = np.max(np.abs([ymin_vort, ymax_vort]))
+    
+
     progress_cad = np.ceil(count/20)
 
     colors = ['#d95f02', '#7570b3', '#1b9e77']
@@ -84,16 +89,23 @@ def main(filename, start, count, output):
         
         task_idx = 0
         task = tasks[task_idx]
+        #print(task)
         for m, subtask in enumerate(subtasks[task]):
-            xdata = f[index][task]['r']
+            #print(subtask, labels[task][m])
+            xdata = f[index][task]['phi']
             ydata = f[index][task]['data_' + subtask].ravel()
+
+            ydata_abs_max = np.max(np.abs(ydata))
+            if ydata_abs_max > 0:
+                ydata *= yabsmax_u / ydata_abs_max
+
             if 'tavg' in subtask:
                 ax1.plot(xdata, ydata, linewidth = 2.25, linestyle = "dotted", color = colors[int(task_idx + np.floor(m/2))], label = labels[task][m])
             else:
                 ax1.plot(xdata, ydata, linewidth = 1.5, linestyle = "solid", color = colors[int(task_idx + np.floor(m/2))], label = labels[task][m])
-        ax1.set_xlabel(r'$r$')
-        ax1.set_ylim(2.5 * ymin_u, 3 * ymax_u)
-        ax1.vlines(f['r_Lg'], 2.5 * ymin_u, 3 * ymax_u, linestyle = "dashed", linewidth = 1, color = "purple", label = r'$r = L_{\gamma}$')
+        ax1.set_xlabel(r'$\phi$')
+        ax1.set_ylabel('Note: renormalized to see overall shapes')
+        ax1.set_ylim(-1.2 * yabsmax_u, 1.2 * yabsmax_u)
         ax1.legend(loc = "lower left", fontsize = 8)
 
 
@@ -101,15 +113,20 @@ def main(filename, start, count, output):
         task_idx = 1
         task = tasks[task_idx]
         for m, subtask in enumerate(subtasks[task]):
-            xdata = f[index][task]['r']
+            xdata = f[index][task]['phi']
             ydata = f[index][task]['data_' + subtask].ravel()
+            
+            ydata_abs_max = np.max(np.abs(ydata))
+            if ydata_abs_max > 0:
+                ydata *= yabsmax_vort / ydata_abs_max
+            
             if 'tavg' in subtask:
                 ax2.plot(xdata, ydata, linewidth = 2.25, linestyle = "dotted", color = colors[int(task_idx + np.floor(m/2))], label = labels[task][m])
             else:
                 ax2.plot(xdata, ydata, linewidth = 1.5, linestyle = "solid", color = colors[int(task_idx + np.floor(m/2))], label = labels[task][m])
-        ax2.set_xlabel(r'$r$')
-        ax2.set_ylim(1.3 * ymin_vort, 4 * ymax_vort)
-        ax2.vlines(f['r_Lg'], 1.3 * ymin_vort, 4 * ymax_vort, linestyle = "dashed", linewidth = 1, color = "purple", label = r'$r = L_{\gamma}$')
+        ax2.set_xlabel(r'$\phi$')
+        ax2.set_ylabel('Note: renormalized to see overall shapes')
+        ax2.set_ylim(-1.2 * yabsmax_vort, 1.2 * yabsmax_vort)
         ax2.legend(loc = "lower left", fontsize = 8)
 
         # Add time title

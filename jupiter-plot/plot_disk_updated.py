@@ -2,12 +2,14 @@
 Plot disk outputs.
 
 Usage:
-    plot_disk.py <files>... [--output=<dir> --plotpvort=<bool> --plotgam=<bool>]
+    plot_disk.py <files>... [--output=<dir> --pvort=<bool> --rms=<bool> --max=<bool> --ea=<bool>]
 
 Options:
     --output=<dir>  Output directory [default: ./frames]
-    --plotpvort=<bool> whether to plot pvort [default: False]
-    --plotgam=<bool> whether to plot Lgamma [default: False]
+    --pvort=<bool> whether to plot pvort [default: False]
+    --rms=<bool> whether to plot Lgamma from u_rms [default: False]
+    --max=<bool> whether to plot Lgamma from u_max [default: False]
+    --ea=<bool> whether to plot Lgamma from u_ea (i.e., sqrt(eps/alpha)) [default: False]
 """
 
 import h5py
@@ -17,13 +19,16 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from dedalus.extras import plot_tools
 
-def main(filename, start, count, output, plotpvort, plotgam):
+def main(filename, start, count, output, options):
     """Save plot of specified tasks for given range of analysis writes."""
-
+    plotpvort, plotgam, plotrms, plotmax, plotea = options
+    
     if plotpvort:
-        tasks = ['vorticity', 'pv']
+        tasks = ['vort', 'pvort']
+        #tasks = ['vorticity', 'pv']
     else:
-        tasks = ['vorticity']
+        tasks = ['vort']
+        #tasks = ['vorticity']
 
     cmap = plt.cm.RdBu_r
     savename_func = lambda write: 'write_{:06}.png'.format(write)
@@ -62,15 +67,29 @@ def main(filename, start, count, output, plotpvort, plotgam):
                 
                 # main plot
                 paxes, caxes = plot_tools.plot_bot_3d(dset, 0, index, axes=axes, title=task, even_scale=True, visible_axes=False, func=func, cmap=cmap)
-                
+
                 # overlay circle
                 if plotgam:
-                    circ_x = Lgams[index] * np.cos(dset_phis)
-                    circ_y = Lgams[index] * np.sin(dset_phis)
-                    paxes.plot(circ_x, circ_y, color = "purple")
-                    circ_x = Lgam_tavg * np.cos(dset_phis)
-                    circ_y = Lgam_tavg * np.sin(dset_phis)
-                    paxes.plot(circ_x, circ_y, color = "black")
+                    if plotrms:                    
+                        circ_x = Lgams_u_rms[index] * np.cos(dset_phis)
+                        circ_y = Lgams_u_rms[index] * np.sin(dset_phis)
+                        paxes.plot(circ_x, circ_y, color = "purple")
+                        circ_x = Lgam_u_rms_tavg * np.cos(dset_phis)
+                        circ_y = Lgam_u_rms_tavg * np.sin(dset_phis)
+                        paxes.plot(circ_x, circ_y, color = "purple", linestyle = "dotted", label = r'$r_{\rm rms} = (\langle u_{\rm rms}\rangle / \gamma)^{1/3}$')
+                    if plotmax:                    
+                        circ_x = Lgams_u_max[index] * np.cos(dset_phis)
+                        circ_y = Lgams_u_max[index] * np.sin(dset_phis)
+                        paxes.plot(circ_x, circ_y, color = "orange")
+                        circ_x = Lgam_u_max_tavg * np.cos(dset_phis)
+                        circ_y = Lgam_u_max_tavg * np.sin(dset_phis)
+                        paxes.plot(circ_x, circ_y, color = "orange", linestyle = "dotted", label = r'$r_{\rm max} = (\langle u_{\rm max}\rangle / \gamma)^{1/3}$')
+                    if plotea:                    
+                        circ_x = Lgam_u_ea_tavg * np.cos(dset_phis)
+                        circ_y = Lgam_u_ea_tavg * np.sin(dset_phis)
+                        paxes.plot(circ_x, circ_y, color = "black", linestyle = "dotted", label = r'$r_{\epsilon, \alpha} = (\sqrt{\epsilon/\alpha} / \gamma)^{1/3}$')
+
+                paxes.legend(loc = 'lower left', fontsize = 6)
                 
                 paxes.axis('off')
                 caxes.cla()
@@ -78,8 +97,17 @@ def main(filename, start, count, output, plotpvort, plotgam):
             
             # Add time title
             title = title_func(file['scales/sim_time'][index])
+            if plotrms or plotmax or plotea:
+                title += '\n'
+            if plotrms: 
+                title += r', $r_{\rm rms}$' + ' = {:.3f}'.format(Lgams_u_rms[index])
+            if plotmax: 
+                title += r', $r_{\rm max}$' + ' = {:.3f}'.format(Lgams_u_max[index])
+            if plotea: 
+                title += r', $r_{\epsilon, \alpha}$' + ' = {:.3f}'.format(Lgam_u_ea_tavg)
+
             title_height = 1 - 0.5 * mfig.margin.top / mfig.fig.y
-            fig.suptitle(title, x=0.4, y=title_height, ha='left')
+            fig.suptitle(title, x=0.05, y=title_height, ha='left')
             # Save figure
             savename = savename_func(file['scales/write_number'][index])
             savepath = output.joinpath(savename)
@@ -109,27 +137,44 @@ if __name__ == "__main__":
             if not output_path.exists():
                 output_path.mkdir()
 
-    if args['--plotpvort'] is not None:
-        plotpvortin = eval(args['--plotpvort'])
+    if args['--pvort'] is not None:
+        plotpvortin = eval(args['--pvort'])
     else:
         plotpvortin = False
 
-    if args['--plotgam'] is not None:
-        plotgamin = eval(args['--plotgam'])
+    if args['--rms'] is not None:
+        plotgamrms = eval(args['--rms'])
+    else:
+        plotgamrms = False
+
+    if args['--max'] is not None:
+        plotgammax = eval(args['--max'])
+    else:
+        plotgammax = False
+
+    if args['--ea'] is not None:
+        plotgamea = eval(args['--ea'])
+    else:
+        plotgamea = False
+
+    if plotgamrms or plotgammax or plotgamea:
+        plotgamin = True
     else:
         plotgamin = False
 
+    options_in = [plotpvortin, plotgamin, plotgamrms, plotgammax, plotgamea]
+
     if plotgamin:
         # To load in processed_vortex_scalars file
-        Nphi, Nr = 512, 256 #640, 320 #768, 384 #512, 256#1024, 512 
+        Nphi, Nr = 768, 384 #640, 320 #768, 384 #512, 256#1024, 512 
         nu = 2e-4 #2e-4 #5e-4 #1e-3 #2e-4 #1e-4 #8e-5 #2e-4 #5e-5
-        gamma = 0 #85 #1920 #240 #30 #0
+        gamma = 675 #85 #1920 #240 #30 #0
         k_force = 20 #20 #10 #20 #70 #35 #20 #50
 
-        eps = 1
+        eps = 1 
         alpha = 1e-2
 
-        ring = 0
+        ring = 0 
         restart_evolved = False #False #True
 
         #output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.0e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) + '_ring_0'
@@ -144,8 +189,15 @@ if __name__ == "__main__":
         output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
 
         processed_vortex_scalars = np.load('../jupiter-process/processed_vortex_scalars_' + output_suffix + '.npy', allow_pickle = True)[()]
-        Lgams = processed_vortex_scalars['Lgamma']['data_Lgamma']
-        Lgam_tavg = processed_vortex_scalars['Lgamma']['data_Lgamma_tavg'][0]
 
-    post.visit_writes(args['<files>'], main, output=output_path, plotpvort=plotpvortin, plotgam=plotgamin)
+        if plotgamrms:
+            Lgams_u_rms = processed_vortex_scalars['Lgamma']['data_Lgamma_u_rms']
+            Lgam_u_rms_tavg = processed_vortex_scalars['Lgamma']['data_Lgamma_u_rms_tavg'][0]
+        if plotgammax:
+            Lgams_u_max = processed_vortex_scalars['Lgamma']['data_Lgamma_u_max']
+            Lgam_u_max_tavg = processed_vortex_scalars['Lgamma']['data_Lgamma_u_max_tavg'][0]
+        if plotgamea:
+            Lgam_u_ea_tavg = processed_vortex_scalars['Lgamma']['data_Lgamma_u_ea_tavg'] # constant
+
+    post.visit_writes(args['<files>'], main, output=output_path, options=options_in)
 
