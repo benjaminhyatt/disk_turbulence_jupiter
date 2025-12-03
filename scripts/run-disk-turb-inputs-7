@@ -1,0 +1,19 @@
+#!/bin/sh -l
+# FILENAME: run-disk-turb-inputs-2
+
+#SBATCH -A MTH250004
+#SBATCH -p wholenode
+#SBATCH --nodes=4
+#SBATCH --ntasks=128
+#SBATCH --time=48:00:00
+#SBATCH --job-name disk-turb-gam-2372-kf-20-checkpoint
+#SBATCH --mail-user=benjamin.hyatt@u.northwestern.edu
+#SBATCH --mail-type=ALL
+
+cd $SLURM_SUBMIT_DIR
+
+module load anaconda/2024.02-py311
+
+conda activate dedalus3
+
+mpiexec python disk_turb_run_inputs.py --kf=20 --alpha=3.3e-2 --gamma=2372 --nu=4e-5 --Nphi=1024 --Nr=512 --restart=True --restart_dir=checkpoints_nu_4em05_gam_2d4ep03_kf_4d0ep01_Nphi_1024_Nr_512_eps_1d0ep00_alpha_3d3em02_ring_0_restart_evolved_0/checkpoints_nu_4em05_gam_2d4ep03_kf_4d0ep01_Nphi_1024_Nr_512_eps_1d0ep00_alpha_3d3em02_ring_0_restart_evolved_0_s86.h5

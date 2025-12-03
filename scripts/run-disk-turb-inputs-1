@@ -1,0 +1,19 @@
+#!/bin/sh -l
+# FILENAME: run-disk-turb-lift-1
+
+#SBATCH -A MTH250004
+#SBATCH -p wholenode
+#SBATCH --nodes=2
+#SBATCH --ntasks=128
+#SBATCH --time=36:00:00
+#SBATCH --job-name disk-turb-gam-0-kf-10
+#SBATCH --mail-user=benjamin.hyatt@u.northwestern.edu
+#SBATCH --mail-type=ALL
+
+cd $SLURM_SUBMIT_DIR
+
+module load anaconda/2024.02-py311
+
+conda activate dedalus3
+
+mpiexec python disk_turb_run_inputs.py --kf=10 --alpha=1e-2 --gamma=0 --nu=2e-4 --Nphi=512 --Nr=256 --tau_mod=True

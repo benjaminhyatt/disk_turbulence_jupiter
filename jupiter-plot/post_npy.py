@@ -82,5 +82,8 @@ def get_all_writes(set_paths):
     writes = []
     for set_path in set_paths:
         f = np.load(str(set_path), allow_pickle=True)[()]
-        writes.append(f['nout'])
+        try:
+            writes.append(f['nout'])
+        except:
+            writes.append(len(f['ws']))
     return writes

@@ -1,0 +1,20 @@
+#!/bin/sh -l
+# FILENAME: run-heat-maps
+
+#SBATCH -A MTH250004
+#SBATCH -p wholenode
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --time=01:00:00
+#SBATCH --job-name run-heat-maps
+#SBATCH --mail-user=benjamin.hyatt@u.northwestern.edu
+#SBATCH --mail-type=ALL
+
+cd $SLURM_SUBMIT_DIR
+
+module load anaconda/2024.02-py311
+
+conda activate dedalus3
+
+mpiexec python process_averages.py
+

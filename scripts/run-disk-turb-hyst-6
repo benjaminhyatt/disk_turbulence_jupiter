@@ -1,0 +1,19 @@
+#!/bin/sh -l
+# FILENAME: run-disk-turb-hyst-5
+
+#SBATCH -A MTH250004
+#SBATCH -p wholenode
+#SBATCH --nodes=2
+#SBATCH --ntasks=128
+#SBATCH --time=24:00:00
+#SBATCH --job-name disk-turb-gam-675-early-to-gam-400
+#SBATCH --mail-user=benjamin.hyatt@u.northwestern.edu
+#SBATCH --mail-type=ALL
+
+cd $SLURM_SUBMIT_DIR
+
+module load anaconda/2024.02-py311
+
+conda activate dedalus3
+
+mpiexec python disk_turb_run_inputs.py --kf=10 --alpha=1e-2 --gamma=400 --nu=2e-4 --Nphi=512 --Nr=256 --restart=True --restart_dir=checkpoints_nu_2em04_gam_6d8ep02_kf_2d0ep01_Nphi_512_Nr_256_eps_1d0ep00_alpha_1d0em02_ring_0_restart_evolved_0/checkpoints_nu_2em04_gam_6d8ep02_kf_2d0ep01_Nphi_512_Nr_256_eps_1d0ep00_alpha_1d0em02_ring_0_restart_evolved_0_s13.h5 --restart_hyst=True --hystn=6

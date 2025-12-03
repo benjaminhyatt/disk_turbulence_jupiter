@@ -88,8 +88,8 @@ def main(filename, start, count, output, options):
                         circ_x = Lgam_u_ea_tavg * np.cos(dset_phis)
                         circ_y = Lgam_u_ea_tavg * np.sin(dset_phis)
                         paxes.plot(circ_x, circ_y, color = "black", linestyle = "dotted", label = r'$r_{\epsilon, \alpha} = (\sqrt{\epsilon/\alpha} / \gamma)^{1/3}$')
-
-                paxes.legend(loc = 'lower left', fontsize = 6)
+                
+                    paxes.legend(loc = 'lower left', fontsize = 6)
                 
                 paxes.axis('off')
                 caxes.cla()

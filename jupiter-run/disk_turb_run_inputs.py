@@ -5,6 +5,8 @@ Usage:
     disk_turb_run.py [options]
 
 Options:    
+    --seed=<int>                random seed for stochastic forcing
+
     --alpha=<float>             large-scale friction [default: 1e-2]
     --gamma=<float>             strength of gamma effect (2 \Omega / a_p^2) [default: 3e1]
     --eps=<float>               energy injection rate (time-averaged) [default: 1e0]
@@ -19,8 +21,12 @@ Options:
 
     --restart=<bool>            flag that this run starts from a previous checkpoint (with same parameters) [default: False]
     --restart_evolved=<bool>    indicate in output names that this run starts from a checkpoint from a run with different parameters [default: False]
+    --restart_eps_0=<bool>      flag that this run starts from a previous checkpoint, but turning the forcing off [default: False]
+    --restart_hyst=<bool>       flag that this run starts from a previous checkpoint, from a different gamma [default: False]
+    --hystn=<int>               experiment number [default: 1]
     --restart_dir=<path>        path of checkpoint to restart from [default: None]
 
+    --tau_mod=<bool>            flag False to use default lift operator, True to use suggested modification [default: True]
 """
 
 import numpy as np
@@ -45,6 +51,8 @@ logger.info("args read in")
 if rank == 0:
     print(args)
 
+# load in seed -- use below
+
 alpha = float(args['--alpha'])
 gamma = float(args['--gamma'])
 eps = float(args['--eps'])
@@ -61,22 +69,20 @@ width = float(args['--width'])
 
 restart = eval(args['--restart'])
 restart_evolved = eval(args['--restart_evolved'])
-if restart or restart_evolved:
+restart_eps_0 = eval(args['--restart_eps_0'])
+restart_hyst = eval(args['--restart_hyst'])
+hystn= int(args['--hystn'])
+if restart or restart_evolved or restart_eps_0 or restart_hyst:
     restart_dir = args['--restart_dir']
 
-#amp = 1 # epsilon^2
-#Nphi, Nr = 640, 320 #768, 384 #640, 320 #512, 256 #768, 384 #1024, 512 #512, 256
-#nu = 1e-4 #5e-5 #1e-4 #2e-4 #8e-5 #2e-4
-#gamma = 240 #0 #30 #240 #1920
-#k_force = 35 #70 #35 #50 #20
-#ring = 0 #1
-#width = 0.08
+tau_mod = eval(args['--tau_mod'])
 
 output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.1e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) 
 output_suffix += '_eps_{:.1e}'.format(eps)
 output_suffix += '_alpha_{:.1e}'.format(alpha)
 output_suffix += '_ring_{:d}'.format(ring)
 output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
+output_suffix += '_tau_mod_{:d}'.format(tau_mod)
 output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
 
 # Bases
@@ -204,7 +210,17 @@ pvort = vort + G
 # Problem
 problem = d3.IVP([p, u, tau_u, tau_p], namespace=locals())
 problem.add_equation("div(u) + tau_p = 0")
-problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
+if tau_mod:
+    if restart_eps_0:
+        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) - alpha*u - G*d3.skew(u)")
+    else:
+        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
+else:
+    if restart_eps_0:
+        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) = - u@grad(u) - alpha*u - G*d3.skew(u)")
+    else:
+        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
+
 problem.add_equation("radial(u(r=1)) = 0", condition='nphi!=0')
 problem.add_equation("azimuthal(radial(stress(r=1))) = 0", condition='nphi!=0')
 problem.add_equation("radial(u(r=1)) = 0", condition='nphi==0')
@@ -220,7 +236,7 @@ except:
 problem.add_equation("integ(p) = 0")
 
 # timestepping
-stop_time = 10/alpha
+stop_time = 8/alpha
 timestepper = d3.SBDF2
 tstep = 1e-5
 
@@ -231,21 +247,31 @@ solver.stop_sim_time = stop_time
 logger.info('solver built')
 
 # Restart from checkpoint
-if restart:
-    #write, initial_timestep = solver.load_state('checkpoints_' + output_suffix +'/checkpoints_' + output_suffix + '_s20.h5')
+if restart_hyst:
     write, initial_timestep = solver.load_state(restart_dir)
-    file_handler_mode = 'append'
-    rand = np.random.RandomState(seed=93+solver.iteration)
+    file_handler_mode = 'overwrite'
+    rand = np.random.RandomState(seed=17+solver.iteration)
+    output_suffix += '_restart_hyst_{:d}'.format(hystn)
 elif restart_evolved:
     #write, initial_timestep = solver.load_state('checkpoints_nu_2em04_gam_0d0ep00_kf_2ep01_Nphi_512_Nr_256_ring_0/checkpoints_nu_2em04_gam_0d0ep00_kf_2ep01_Nphi_512_Nr_256_ring_0_s28.h5')
     write, initial_timestep = solver.load_state(restart_dir)
     file_handler_mode = 'overwrite'
     rand = np.random.RandomState(seed=10001+solver.iteration)
+elif restart_eps_0:
+    write, initial_timestep = solver.load_state(restart_dir)
+    file_handler_mode = 'append'
+elif restart:
+    #write, initial_timestep = solver.load_state('checkpoints_' + output_suffix +'/checkpoints_' + output_suffix + '_s20.h5')
+    write, initial_timestep = solver.load_state(restart_dir)
+    file_handler_mode = 'append'
+    rand = np.random.RandomState(seed=93+solver.iteration)
 else:
     file_handler_mode = 'overwrite'
 
 # Analysis
-analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.1, mode=file_handler_mode)
+#analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.1, mode=file_handler_mode)
+#analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.02, mode=file_handler_mode)
+analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.05, mode=file_handler_mode)
 # scalars
 analysis.add_task(d3.Average(0.5*u@u), name = 'KE')
 analysis.add_task(d3.Average(angm), name = 'Lzu')
@@ -263,21 +289,19 @@ vortm0 = d3.Average(vort, coords['phi'])
 analysis.add_task(vortm0, name = 'vortm0')
 pvortm0 = d3.Average(pvort, coords['phi'])
 analysis.add_task(pvortm0, name = 'pvortm0')
-
 drvortm0 = er@d3.grad(vortm0)
 analysis.add_task(drvortm0, name = 'drvortm0')
 drpvortm0 = er@d3.grad(pvortm0)
 analysis.add_task(drpvortm0, name = 'drpvortm0')
-
-dr2vortm0 = er@d3.grad(drvortm0)
-analysis.add_task(dr2vortm0, name = 'dr2vortm0')
+#dr2vortm0 = er@d3.grad(drvortm0)
+#analysis.add_task(dr2vortm0, name = 'dr2vortm0')
 dr2pvortm0 = er@d3.grad(drpvortm0)
 analysis.add_task(dr2pvortm0, name = 'dr2pvortm0')
 
-um0 = d3.Average(u, coords['phi'])
-analysis.add_task(um0, name = 'um0')
-u2m0 = d3.Average(u@u , coords['phi'])
-analysis.add_task(u2m0, name='u2m0')
+#um0 = d3.Average(u, coords['phi'])
+#analysis.add_task(um0, name = 'um0')
+#u2m0 = d3.Average(u@u , coords['phi'])
+#analysis.add_task(u2m0, name='u2m0')
 
 # snapshots
 analysis.add_task(vort, layout='g', name='vort')
@@ -287,12 +311,13 @@ analysis.add_task(pvort, layout='g', name='pvort')
 # Flow properties
 flow = d3.GlobalFlowProperty(solver, cadence=10)
 flow.add_property(u@u, name='u2')
+flow.add_property(vort*vort, name = 'w2')
 
 CFL = d3.CFL(solver, initial_dt=tstep, cadence=10, safety=0.1, threshold=0.05, max_dt=1e-4) #safety=0.15
 CFL.add_velocity(u)
 
 # Checkpoints
-checkpoints = solver.evaluator.add_file_handler('checkpoints_' + output_suffix, sim_dt = 10, max_writes = 1, mode=file_handler_mode)
+checkpoints = solver.evaluator.add_file_handler('checkpoints_' + output_suffix, sim_dt = 1, max_writes = 1, mode=file_handler_mode)
 checkpoints.add_tasks(solver.state)
 
 # Main loop
@@ -303,7 +328,9 @@ try:
         solver.step(tstep)
         if (solver.iteration-1) % 100 == 0:
             max_u = np.sqrt(flow.max('u2'))
-            logger.info("Iteration=%i, Time=%e, dt=%e, max(u)=%e" %(solver.iteration, solver.sim_time, tstep, max_u))
+            ke_avg = flow.grid_average('u2')
+            en_avg = flow.grid_average('w2')
+            logger.info("Iteration=%i, Time=%e, dt=%e, max(u)=%e, Kavg=%e, Zavg=%e" %(solver.iteration, solver.sim_time, tstep, max_u, ke_avg, en_avg))
             if max_u > 1e4 or np.isnan(max_u):
                 print(max_u)
                 break

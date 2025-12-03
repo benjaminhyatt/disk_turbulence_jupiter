@@ -2,17 +2,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 import h5py
 
-Nphi, Nr = 768, 384 #768, 384 #640, 320 #768, 384 #512, 256#1024, 512 
-nu = 2e-4 #2e-4 #8e-5 #5e-4 #1e-3 #2e-4 #1e-4 #8e-5 #2e-4 #5e-5
-gamma = 240 #675 #85 #1920 #240 #30 #0
-k_force = 20 #20 #10 #20 #70 #35 #20 #50
+Nphi, Nr = 1536, 768 #512, 256 #1024, 512#768, 384 #768, 384 #640, 320 #768, 384 #512, 256#1024, 512 
+nu = 4e-5 #2e-4 #4e-5 #2e-4 #2e-4 #8e-5 #5e-4 #1e-3 #2e-4 #1e-4 #8e-5 #2e-4 #5e-5
+gamma = 2500 #1920 #400 #675 #240 #675 #85 #675 #240 #2372 #1920#240 #675 #85 #1920 #240 #30 #0
+k_force = 40 #20 #40 #20 #80 #20 #20 #10 #20 #70 #35 #20 #50
 
 eps = 1
-alpha = 1e-2
+alpha = 3.3e-2 #1e-2
 
 ring = 0
 
 restart_evolved = False #False #True
+
+restart_hyst = False #True
+hystn = 7
 
 #output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.0e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) + '_ring_0'
 ##output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
@@ -24,6 +27,9 @@ output_suffix += '_alpha_{:.1e}'.format(alpha)
 output_suffix += '_ring_{:d}'.format(ring)
 output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
 output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
+
+if restart_hyst:
+    output_suffix += '_restart_hyst_{:d}'.format(hystn)
 
 processed = np.load('../jupiter-process/processed_scalars_' + output_suffix + '.npy', allow_pickle=True)[()]
 
@@ -47,7 +53,7 @@ if not restart_evolved:
  
 
     plt.xlabel(r'$t$')
-    plt.ylim(-0.5, 1.1*processed['KE_tavg_expected'])
+    #plt.ylim(-0.5, 1.1*processed['KE_tavg_expected'])
     #plt.ylim(-0.5, 7)
     #plt.ylim(-0.2, 1)
     plt.legend(loc = (1.05, 0.05), framealpha = 0.9)
@@ -71,15 +77,15 @@ else:
     plt.tight_layout()
     plt.savefig("KE.pdf")
 
-plt.figure()
-plt.plot(processed['t'], processed['Lzu'], color = 'blue')
-plt.plot(processed['t'], np.zeros(processed['t'].shape[0]), linestyle = 'dashed', color = 'black')
-plt.xlabel('time')
-plt.ylabel('net angular momentum')
-#plt.legend()
-plt.title("Time average of net angular momentum = {:.4}".format(np.mean(processed['Lzu'])))
-plt.tight_layout()
-plt.savefig("Lzu.pdf")
+#plt.figure()
+#plt.plot(processed['t'], processed['Lzu'], color = 'blue')
+#plt.plot(processed['t'], np.zeros(processed['t'].shape[0]), linestyle = 'dashed', color = 'black')
+#plt.xlabel('time')
+#plt.ylabel('net angular momentum')
+##plt.legend()
+#plt.title("Time average of net angular momentum = {:.4}".format(np.mean(processed['Lzu'])))
+#plt.tight_layout()
+#plt.savefig("Lzu.pdf")
 
 plt.figure()
 plt.plot(processed['t'], processed['EN'], color = 'blue')
@@ -102,19 +108,19 @@ plt.savefig("EN.pdf")
 #plt.savefig("W.pdf")
 
 
-plt.figure()
-#plt.plot(processed['t'], np.abs(processed['ENbdry']), label = 'ENbdry')
-#plt.plot(processed['t'], np.abs(processed['PA']), label = 'PA')
-#plt.plot(processed['t'], np.abs(processed['PAbdry1']), label = 'PAbdry1')
-#plt.plot(processed['t'], np.abs(processed['PAbdry2']), label='PAbdry2')
-plt.plot(processed['t'], processed['ENbdry'], label = 'ENbdry')
-plt.plot(processed['t'], processed['PA'], label = 'PA')
-plt.plot(processed['t'], processed['PAbdry1'], label = 'PAbdry1')
-plt.plot(processed['t'], processed['PAbdry2'], label='PAbdry2')
-print(np.mean(processed['PA']), np.mean(processed['PAbdry1']), np.mean(processed['PAbdry2']))
-plt.xlabel('time')
-#plt.yscale('log')
-plt.yscale('symlog')
-plt.legend()
-plt.tight_layout()
-plt.savefig("new.pdf")
+#plt.figure()
+##plt.plot(processed['t'], np.abs(processed['ENbdry']), label = 'ENbdry')
+##plt.plot(processed['t'], np.abs(processed['PA']), label = 'PA')
+##plt.plot(processed['t'], np.abs(processed['PAbdry1']), label = 'PAbdry1')
+##plt.plot(processed['t'], np.abs(processed['PAbdry2']), label='PAbdry2')
+#plt.plot(processed['t'], processed['ENbdry'], label = 'ENbdry')
+#plt.plot(processed['t'], processed['PA'], label = 'PA')
+#plt.plot(processed['t'], processed['PAbdry1'], label = 'PAbdry1')
+#plt.plot(processed['t'], processed['PAbdry2'], label='PAbdry2')
+#print(np.mean(processed['PA']), np.mean(processed['PAbdry1']), np.mean(processed['PAbdry2']))
+#plt.xlabel('time')
+##plt.yscale('log')
+#plt.yscale('symlog')
+#plt.legend()
+#plt.tight_layout()
+#plt.savefig("new.pdf")
