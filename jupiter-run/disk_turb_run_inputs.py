@@ -2,10 +2,10 @@
 Run simulations of disk turbulence in the gamma plane approximation
 
 Usage:
-    disk_turb_run.py [options]
+    disk_turb_run_inputs.py [options]
 
 Options:    
-    --seed=<int>                random seed for stochastic forcing
+    --seed=<int>                random seed for stochastic forcing [default: 31415926]
 
     --alpha=<float>             large-scale friction [default: 1e-2]
     --gamma=<float>             strength of gamma effect (2 \Omega / a_p^2) [default: 3e1]
@@ -20,13 +20,14 @@ Options:
     --width=<float>             sets width of the transition region in forcing as r approaches the boundary [default: 0.08] (only used if ring True)
 
     --restart=<bool>            flag that this run starts from a previous checkpoint (with same parameters) [default: False]
-    --restart_evolved=<bool>    indicate in output names that this run starts from a checkpoint from a run with different parameters [default: False]
-    --restart_eps_0=<bool>      flag that this run starts from a previous checkpoint, but turning the forcing off [default: False]
+    --restart_dir=<path>        path of checkpoint to restart from [default: None]
     --restart_hyst=<bool>       flag that this run starts from a previous checkpoint, from a different gamma [default: False]
     --hystn=<int>               experiment number [default: 1]
-    --restart_dir=<path>        path of checkpoint to restart from [default: None]
 
     --tau_mod=<bool>            flag False to use default lift operator, True to use suggested modification [default: True]
+
+    --restart_eps_0=<bool>      flag that this run starts from a previous checkpoint, but turning the forcing off [default: False]
+    --restart_evolved=<bool>    indicate in output names that this run starts from a checkpoint from a run with different parameters [default: False]
 """
 
 import numpy as np
@@ -51,7 +52,7 @@ logger.info("args read in")
 if rank == 0:
     print(args)
 
-# load in seed -- use below
+seed_in = int(args['--seed'])
 
 alpha = float(args['--alpha'])
 gamma = float(args['--gamma'])
@@ -83,6 +84,7 @@ output_suffix += '_alpha_{:.1e}'.format(alpha)
 output_suffix += '_ring_{:d}'.format(ring)
 output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
 output_suffix += '_tau_mod_{:d}'.format(tau_mod)
+output_suffix += '_seed_{:d}'.format(seed_in)
 output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
 
 # Bases
@@ -129,7 +131,7 @@ phi_len = len(phi_deal.ravel())
 r_len = len(r_deal.ravel())
 transform_vector = transform_vector.reshape(2, phi_len, r_len, k_len)
 
-rand = np.random.RandomState(seed=10001)
+rand = np.random.RandomState(seed=seed_in) #10001
 phases = rand.uniform(0,2*np.pi,k_len)
 forcing = np.real(transform_vector @ np.exp(1j*phases))
 
@@ -246,28 +248,16 @@ solver = problem.build_solver(timestepper)
 solver.stop_sim_time = stop_time
 logger.info('solver built')
 
-# Restart from checkpoint
-if restart_hyst:
+# restart from checkpoint
+if restart or restart_evolved or restart_eps_0 or restart_hyst:
     write, initial_timestep = solver.load_state(restart_dir)
-    file_handler_mode = 'overwrite'
-    rand = np.random.RandomState(seed=17+solver.iteration)
-    output_suffix += '_restart_hyst_{:d}'.format(hystn)
-elif restart_evolved:
-    #write, initial_timestep = solver.load_state('checkpoints_nu_2em04_gam_0d0ep00_kf_2ep01_Nphi_512_Nr_256_ring_0/checkpoints_nu_2em04_gam_0d0ep00_kf_2ep01_Nphi_512_Nr_256_ring_0_s28.h5')
-    write, initial_timestep = solver.load_state(restart_dir)
-    file_handler_mode = 'overwrite'
-    rand = np.random.RandomState(seed=10001+solver.iteration)
-elif restart_eps_0:
-    write, initial_timestep = solver.load_state(restart_dir)
-    file_handler_mode = 'append'
-elif restart:
-    #write, initial_timestep = solver.load_state('checkpoints_' + output_suffix +'/checkpoints_' + output_suffix + '_s20.h5')
-    write, initial_timestep = solver.load_state(restart_dir)
-    file_handler_mode = 'append'
-    rand = np.random.RandomState(seed=93+solver.iteration)
+    if restart:
+        file_handler_mode = 'append'
+    else:
+        file_handler_mode = 'overwrite'
+    rand = np.random.RandomState(seed=seed_in+solver.iteration)
 else:
     file_handler_mode = 'overwrite'
-
 # Analysis
 #analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.1, mode=file_handler_mode)
 #analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.02, mode=file_handler_mode)
