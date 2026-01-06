@@ -24,7 +24,7 @@ rank = comm.Get_rank()
 
 Nphi, Nr = 512, 256
 nu = 2e-4
-gamma = 85 #0 #1920 #0 
+gamma = 0#1920 #0 #85 #0 #1920 #0 
 k_force = 20
 eps = 1 
 alpha = 1e-2
@@ -52,7 +52,7 @@ plt.rcParams['mathtext.rm'] = 'serif'
 plt.rcParams['font.size'] = 17
 plt.rcParams['figure.dpi'] = dpi
 
-t_mar, b_mar, l_mar, r_mar = (0.1, 0.15, 0.15, 0.05)
+t_mar, b_mar, l_mar, r_mar = (0.1, 0.20, 0.20, 0.05)
 #golden_mean = (np.sqrt(5) - 1.) / 2.
 #h_plot, w_plot = (1., 1. / golden_mean)
 h_plot, w_plot = (1., 1.)
@@ -94,8 +94,10 @@ else:
 
 #ymin = 10**(np.floor(np.log10(np.min(f[tasks[-1]][1:,:]))) + 1)
 #ymax = 10**(np.ceil(np.log10(np.max(f[tasks[-1]][1:,:]))))
-ymin = 1e-9
-ymax = 1e1
+#ymin = 1e-9
+#ymax = 1e1
+ymin = 5e-12
+ymax = 5e1
 
 ax1 = fig.add_axes([left1, bottom1, width1, height1])
 ax1.set_yscale('log')

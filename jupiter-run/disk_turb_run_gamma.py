@@ -6,12 +6,12 @@ Usage:
 
 Options:    
     
-    --gammai=<float>            (initial) strength of gamma effect (2 \Omega / a_p^2) [default: 2.4e2]
-    --gammaf=<float>            (final) [default: 3.2e2]
+    --gammai=<float>            (initial) strength of gamma effect (2 \Omega / a_p^2) [default: 4e2]
+    --gammaf=<float>            (final) [default: 2.4e2]
     --dgamma=<float>            step size in gamma to evolve with [default: 4e1]
-    --ke_dt=<float>             time interval over which to measure changes in ke [default: 2.5e1]
+    --ke_dt=<float>             time interval over which to measure changes in ke [default: 1e1]
     --ke_rtol_minmax=<float>  tolerance (relative to ke avg over ke_dt) for |ke_max - ke_min| over ke_dt [default: 2e-1]
-    --ke_rtol_lin=<float>     tolerance (relative to ke avg over ke_dt) for linear fit's dke [default: 1e-1]
+    --ke_rtol_lin=<float>     tolerance (relative to ke avg over ke_dt) for linear fit's dke [default: 3e-2]
 
     --seed=<int>                random seed for stochastic forcing [default: 31415926]
 
@@ -52,6 +52,9 @@ dtype = np.float64
 from docopt import docopt
 args = docopt(__doc__)
 
+# initial timestep size
+tstep = 1e-5
+
 logger.info("args read in")
 if rank == 0:
     print(args)
@@ -60,8 +63,8 @@ gammai = float(args['--gammai'])
 gammaf = float(args['--gammaf'])
 dgamma = float(args['--dgamma'])
 ke_dt = float(args['--ke_dt'])
-ke_rt_mm = float(args['--ke_rtol_minmax'])
-ke_rt_lin = float(args['--ke_rtol_lin'])
+ke_rtol_mm = float(args['--ke_rtol_minmax'])
+ke_rtol_lin = float(args['--ke_rtol_lin'])
 
 seed_in = int(args['--seed'])
 
@@ -169,7 +172,10 @@ v1=dist.VectorField(coords, bases=disk)
 v1.preset_scales(dealias)
 
 # Define GeneralFunction for forcing
+#def forcing_func(timestep):
 def forcing_func():
+    global tstep
+
     phases = rand.uniform(0,2*np.pi,k_len)
     f1=np.real(transform_vector @ np.exp(1j*phases))
     if ring:
@@ -204,10 +210,11 @@ def forcing_func():
     else:
         data = None
     norm_int= MPI.COMM_WORLD.scatter(data, root=0)
-        
-    return f * np.sqrt(2/norm_int/tstep)
 
-F= d3.GeneralFunction(dist, u.domain, u.tensorsig, dtype, 'g', forcing_func)
+    #print(tstep)
+    #print(timestep)
+    #return f * np.sqrt(2/norm_int/timestep)
+    return f * np.sqrt(2/norm_int/tstep)
 
 def setup_G(gamma):
     g1 = dist.Field(bases=disk)
@@ -219,179 +226,269 @@ def setup_G(gamma):
 def linear_curve(xdata, a1, a2):
     return a1*xdata + a2
 
-def build_and_run_solver(experiment_vars, init_vars):
-    
-    ## unpack input args
-    gamma, tf, rtol_mm, rtol_lin = experiment_vars
-    use_state, state_dir, file_handler_mode, analysis_dir, checkpoints_dir = init_vars
+## initial definitions prior to build
+F= d3.GeneralFunction(dist, u.domain, u.tensorsig, dtype, 'g', forcing_func)
+#F = lambda A: d3.GeneralFunction(dist, u.domain, u.tensorsig, dtype, 'g', forcing_func, args = [A])
+G = setup_G(gammai)
 
-    ## build Coriolis vars
-    G = build_G(gamma)
+## build problem 
+problem = d3.IVP([p, u, tau_u, tau_p], namespace=locals())
+problem.add_equation("div(u) + tau_p = 0")
+if tau_mod:
+    problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
+    #problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) + amp*F(tstep) - alpha*u - G*d3.skew(u)")
+else:
+    problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
+    #problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) = - u@grad(u) + amp*F(tstep) - alpha*u - G*d3.skew(u)")
+problem.add_equation("radial(u(r=1)) = 0", condition='nphi!=0')
+problem.add_equation("azimuthal(radial(stress(r=1))) = 0", condition='nphi!=0')
+problem.add_equation("radial(u(r=1)) = 0", condition='nphi==0')
+try:
+    problem.equations[-1]['valid_modes'][1] = True
+except:
+    logger.info("Skipping valid modes line on rank %d" %(rank))
+problem.add_equation("azimuthal(radial(stress(r=1))) = 0", condition='nphi==0')
+try:
+    problem.equations[-1]['valid_modes'][1] = True
+except:
+    logger.info("Skipping valid modes line on rank %d" %(rank))
+problem.add_equation("integ(p) = 0")
+
+## build solver
+timestepper = d3.SBDF2
+logger.info('building solver')
+solver = problem.build_solver(timestepper)
+logger.info('solver built')
+
+## analysis
+pvort = vort + G
+
+KE = d3.Average(0.5*u@u)
+Lzu = d3.Average(angm)
+W = d3.Average(vort)
+EN = d3.Average(vort*vort)
+ENbdry = d3.Average(-2 * ((ephi@u)(r=1))**2, coords['phi'])
+PA = d3.Average(d3.lap(u)@d3.lap(u))
+PAbdry1 = d3.Average(-2 * (ephi@u)(r=1) * (er@d3.grad(er@d3.grad((ephi@u))))(r=1), coords['phi'])
+PAbdry2 = d3.Average(2 * (ephi@u)(r=1) * (er@d3.grad(ephi@d3.grad((er@u))))(r=1), coords['phi'])
+
+vortm0 = d3.Average(vort, coords['phi'])
+pvortm0 = d3.Average(pvort, coords['phi'])
+drvortm0 = er@d3.grad(vortm0)
+drpvortm0 = er@d3.grad(pvortm0)
+dr2pvortm0 = er@d3.grad(drpvortm0)
+
+file_handler_mode = 'overwrite'
+
+analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.05, mode=file_handler_mode)
+# scalars
+analysis.add_task(KE, name = 'KE')
+analysis.add_task(Lzu, name = 'Lzu')
+analysis.add_task(W, name = 'W')
+analysis.add_task(EN, name = 'EN')
+analysis.add_task(ENbdry, name = 'ENbdry')
+analysis.add_task(PA, name = 'PA')
+analysis.add_task(PAbdry1, name='PAbdry1')
+analysis.add_task(PAbdry2, name='PAbdry2')
+# profiles
+analysis.add_task(vortm0, name = 'vortm0')
+analysis.add_task(pvortm0, name = 'pvortm0')
+analysis.add_task(drvortm0, name = 'drvortm0')
+analysis.add_task(drpvortm0, name = 'drpvortm0')
+analysis.add_task(dr2pvortm0, name = 'dr2pvortm0')
+# snapshots
+analysis.add_task(vort, layout='g', name='vort')
+analysis.add_task(u, layout='g', name='u')
+analysis.add_task(pvort, layout='g', name='pvort')
+
+## checkpoints
+checkpoints = solver.evaluator.add_file_handler('checkpoints_' + output_suffix, sim_dt = 1, max_writes = 1, mode=file_handler_mode)
+checkpoints.add_tasks(solver.state)
+
+## flow properties
+flow = d3.GlobalFlowProperty(solver, cadence=10)
+flow.add_property(u@u, name='u2')
+flow.add_property(vort*vort, name = 'w2')
+
+## cfl
+CFL = d3.CFL(solver, initial_dt=1e-5, cadence=10, safety=0.1, threshold=0.05, max_dt=1e-4)
+CFL.add_velocity(u)
+
+def run_solver(experiment_vars, init_vars):
+    global tstep
+
+    ## unpack input args
+    gamma, check_dt, rtol_mm, rtol_lin = experiment_vars
+    #use_state, state_dir, file_handler_mode, analysis_dir, checkpoints_dir = init_vars
+    use_state, state_dir = init_vars
+
+    ## updates for new gamma
+    G = setup_G(gamma)
     pvort = vort + G
 
-    ## build problem 
-    problem = d3.IVP([p, u, tau_u, tau_p], namespace=locals())
-    problem.add_equation("div(u) + tau_p = 0")
-    if tau_mod:
-        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
-    else:
-        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
-    problem.add_equation("radial(u(r=1)) = 0", condition='nphi!=0')
-    problem.add_equation("azimuthal(radial(stress(r=1))) = 0", condition='nphi!=0')
-    problem.add_equation("radial(u(r=1)) = 0", condition='nphi==0')
-    try:
-        problem.equations[-1]['valid_modes'][1] = True
-    except:
-        logger.info("Skipping valid modes line on rank %d" %(rank))
-    problem.add_equation("azimuthal(radial(stress(r=1))) = 0", condition='nphi==0')
-    try:
-        problem.equations[-1]['valid_modes'][1] = True
-    except:
-        logger.info("Skipping valid modes line on rank %d" %(rank))
-    problem.add_equation("integ(p) = 0")
-
-    ## build solver
-    timestepper = d3.SBDF2
-    logger.info('building solver')
-    solver = problem.build_solver(timestepper)
-    logger.info('solver built')
-
-    ## initial state (either load a state or fields will be zero)
-    if use_state:
-        write, tstep = solver.load_state(state_dir)
-        rand = np.random.RandomState(seed=seed_in+solver.iteration)
-    else:
-        tstep = 1e-5
-        rand = np.random.RandomState(seed=seed_in)
-
-    ngamma = np.ceil((gammaf - gammai) / dgamma)
-    solver.stop_sim_time = solver.sim_time + ngamma * (2/alpha) # should typically never take longer than this
-
-    ## analysis 'analysis_' + output_suffix
-    analysis = solver.evaluator.add_file_handler(analysis_dir, sim_dt = 0.05, mode=file_handler_mode)
-    # scalars
-    analysis.add_task(d3.Average(0.5*u@u), name = 'KE')
-    analysis.add_task(d3.Average(angm), name = 'Lzu')
-    analysis.add_task(d3.Average(vort), name = 'W')
-    analysis.add_task(d3.Average(vort*vort), name = 'EN')
-    analysis.add_task(d3.Average(-2 * ((ephi@u)(r=1))**2, coords['phi']), name = 'ENbdry')
-    analysis.add_task(d3.Average(d3.lap(u)@d3.lap(u)), name = 'PA')
-    analysis.add_task(d3.Average(-2 * (ephi@u)(r=1) * (er@d3.grad(er@d3.grad((ephi@u))))(r=1), coords['phi']), name='PAbdry1')
-    analysis.add_task(d3.Average(2 * (ephi@u)(r=1) * (er@d3.grad(ephi@d3.grad((er@u))))(r=1), coords['phi']), name='PAbdry2')
-    # profiles
-    vortm0 = d3.Average(vort, coords['phi'])
-    analysis.add_task(vortm0, name = 'vortm0')
-    pvortm0 = d3.Average(pvort, coords['phi'])
-    analysis.add_task(pvortm0, name = 'pvortm0')
-    drvortm0 = er@d3.grad(vortm0)
-    analysis.add_task(drvortm0, name = 'drvortm0')
-    drpvortm0 = er@d3.grad(pvortm0)
-    analysis.add_task(drpvortm0, name = 'drpvortm0')
-    dr2pvortm0 = er@d3.grad(drpvortm0)
-    analysis.add_task(dr2pvortm0, name = 'dr2pvortm0')
-    # snapshots
-    analysis.add_task(vort, layout='g', name='vort')
-    analysis.add_task(u, layout='g', name='u')
-    analysis.add_task(pvort, layout='g', name='pvort')
-
-    ## checkpoints 'checkpoints_' + output_suffix
-    checkpoints = solver.evaluator.add_file_handler(checkpoints_dir, sim_dt = 1, max_writes = 1, mode=file_handler_mode)
-    checkpoints.add_tasks(solver.state)
-
-    ## flow properties
-    flow = d3.GlobalFlowProperty(solver, cadence=10)
-    flow.add_property(u@u, name='u2')
-    flow.add_property(vort*vort, name = 'w2')
-    
-    ## cfl
-    CFL = d3.CFL(solver, initial_dt=tstep, cadence=10, safety=0.1, threshold=0.05, max_dt=1e-4)
-    CFL.add_velocity(u)
-
     ## evolve
-    dt_measure = np.max((ke_dt / 1e3, max_dt))
+    dt_measure = np.max((ke_dt / 1e4, 1e-3))
     t_last_measure = 0.
-    ke_vals = []
-    ke_ts = []
+    ke_vals = np.array([]) #[]
+    ke_ts = np.array([]) #[]
 
     t_begin_check = solver.sim_time + ke_dt
     dt_check = ke_dt / 2
-    t_last_check = 0.
+    #t_last_check = 0.
+
+    if use_bool:
+        solver.load_state(state_dir)
+        solver.sim_time = 0. 
+    
+    t_last_check = solver.sim_time
 
     logger.info("Start time: %e, time to begin checking: %e, gamma: %e" %(solver.sim_time, t_begin_check, gamma)) 
-    try:
-        logger.info('Starting main loop')
-        while solver.proceed:
-            
-            tstep = CFL.compute_timestep()
-            solver.step(tstep)
-            
-            # experiment measurement
-            if solver.sim_time >= t_last_measure + dt_measure:
-                ke_avg = flow.grid_average('u2')
-                ke_vals.append(float(ke_avg))
-                ke_ts.append(float(solver.sim_time))
-                t_last_measure = solver.sim_time
+    logger.info('Starting main loop')
 
-            # experiment check
-            if solver.sim_time >= t_begin_check:
-                if solver.sim_time >= t_last_check + dt_check:
-                    ke_min = np.min(ke_vals)
-                    ke_max = np.max(ke_vals)
-                    ke_fit, ~ = curve_fit(linear_curve, ke_ts, ke_vals)
-                    
-                    ke_tavg = linear_curve(t_last_check + dt_check/2, ke_fit[0], ke_fit[1])
-                    
-                    dke_mm = np.max((np.abs(ke_max - ke_tavg), np.abs(ke_min - ke_tavg)))
-                    dke_mm_rel = dke_mm / ke_tavg
+    exits_failed = True
+    while solver.proceed and exits_failed:
+        
+        tstep = CFL.compute_timestep()
+        #F= d3.GeneralFunction(dist, u.domain, u.tensorsig, dtype, 'g', forcing_func, args = [tstep])
+        solver.step(tstep)
+        
+        # experiment measurement
+        if solver.sim_time >= t_last_measure + dt_measure:
+            #ke_avg = flow.grid_average('u2')
+            ke_avg_int = KE.evaluate()
+            if rank == 0:
+                data = [ke_avg_int['g'][0][0]]*size
+            else:
+                data = None
+            ke_avg = MPI.COMM_WORLD.scatter(data, root=0) 
 
-                    dke_lin = ke_fit[0] * dt_check
-                    dke_lin_rel = np.abs(dke_lin) / ke_tavg
+            ke_vals = np.append(ke_vals, float(ke_avg))
+            #ke_vals.append(float(ke_avg))
+            ke_ts = np.append(ke_ts, float(solver.sim_time))
+            #ke_ts.append(float(solver.sim_time))
+            t_last_measure = solver.sim_time
 
-                    t_last_check = solver.sim_time
-                    if dke_mm_rel <= ke_rtol_mm:
-                        logger.info("exit1 passed: dke_mm_rel = %e, ke_rtol_mm = %e" %(dke_mm_rel, ke_rtol_mm))
-                        exit1 = True
-                    if dke_mm_rel <= ke_rtol_mm:
-                        logger.info("exit1 failed: dke_mm_rel = %e, ke_rtol_mm = %e" %(dke_mm_rel, ke_rtol_mm))
-                        exit1 = False 
-                    if dke_lin_rel <= ke_rtol_lin:
-                        logger.info("exit2 passed: dke_lin_rel = %e, ke_rtol_lin = %e" %(dke_lin_rel, ke_rtol_lin))
-                        exit2 = True
-                    else:
-                        logger.info("exit2 failed: dke_lin_rel = %e, ke_rtol_lin = %e" %(dke_lin_rel, ke_rtol_lin))
-                        exit2 = False
+        # experiment check
+        if solver.sim_time >= t_begin_check:
+            if solver.sim_time >= t_last_check + dt_check:
+                ke_min = np.min(ke_vals)
+                ke_max = np.max(ke_vals)
+                ke_fit, _ = curve_fit(linear_curve, ke_ts, ke_vals)
+                
+                ke_tavg = linear_curve(t_last_check + dt_check/2, ke_fit[0], ke_fit[1])
+                
+                dke_mm = np.max((np.abs(ke_max - ke_tavg), np.abs(ke_min - ke_tavg)))
+                dke_mm_rel = dke_mm / ke_tavg
 
-                    if exit1 and exit2:
-                        
-                        # def returns here ? 
+                dke_lin = ke_fit[0] * dt_check
+                dke_lin_rel = np.abs(dke_lin) / ke_tavg
 
-                        logger.info("breaking loop on solver.iteration = %i" %(solver.iteration))
-                        solver.proceed = False
+                if dke_mm_rel <= rtol_mm:
+                    logger.info("exit1 passed: dke_mm_rel = %e, ke_rtol_mm = %e" %(dke_mm_rel, rtol_mm))
+                    exit1 = True
+                else:
+                    logger.info("exit1 failed: dke_mm_rel = %e, ke_rtol_mm = %e" %(dke_mm_rel, rtol_mm))
+                    exit1 = False 
+                if dke_lin_rel <= rtol_lin:
+                    logger.info("exit2 passed: dke_lin_rel = %e, ke_rtol_lin = %e" %(dke_lin_rel, rtol_lin))
+                    exit2 = True
+                else:
+                    logger.info("exit2 failed: dke_lin_rel = %e, ke_rtol_lin = %e" %(dke_lin_rel, rtol_lin))
+                    exit2 = False
 
-                    else: 
-                        logger.info("one or more checks did not pass, proceeding")
+                if exit1 and exit2:
+                    logger.info("breaking loop on solver.iteration = %i, time=%e" %(solver.iteration, solver.sim_time))
+                    exits_failed = False
+                    #break
+                    #solver.proceed = False
 
-                        # trim ke_vals and ke_ts lists here
+                else: 
+                    logger.info("one or more checks did not pass, proceeding")
+                    to_keep = ke_ts >= t_last_check + dt_check/2
+                    ke_vals = ke_vals[to_keep]
+                    ke_ts = ke_ts[to_keep]
 
-            # typical outputs/checks
-            if ((solver.iteration-1) % 100 == 0) or (not solver.proceed):
-                max_u = np.sqrt(flow.max('u2'))
-                ke_avg = flow.grid_average('u2')
-                en_avg = flow.grid_average('w2')
-                logger.info("Iteration=%i, Time=%e, dt=%e, max(u)=%e, Kavg=%e, Zavg=%e" %(solver.iteration, solver.sim_time, tstep, max_u, ke_avg, en_avg))
-                if max_u > 1e4 or np.isnan(max_u):
-                    print(max_u)
-                    break
-    except:
-        logger.error('Exception raised, triggering end of main loop.')
-        raise
-    finally:
-        solver.log_stats()
+                t_last_check = solver.sim_time
 
-    return # tbd
+        # typical outputs/checks
+        if ((solver.iteration-1) % 500 == 0) or (not solver.proceed):
+            max_u = np.sqrt(flow.max('u2'))
+            #ke_avg = flow.grid_average('u2')
+            #en_avg = flow.grid_average('w2')
+            ke_avg_int = KE.evaluate()
+            if rank == 0:
+                data = [ke_avg_int['g'][0][0]]*size
+            else:
+                data = None
+            ke_avg = MPI.COMM_WORLD.scatter(data, root=0)
+            en_avg_int = EN.evaluate()
+            if rank == 0:
+                data = [en_avg_int['g'][0][0]]*size
+            else:
+                data = None
+            en_avg = MPI.COMM_WORLD.scatter(data, root=0)
+            logger.info("Iteration=%i, Time=%e, t_last_check=%e, dt=%e, max(u)=%e, Kavg=%e, Zavg=%e" %(solver.iteration, solver.sim_time, t_last_check, tstep, max_u, ke_avg, en_avg))
+            if max_u > 1e4 or np.isnan(max_u):
+                print(max_u)
+                break
+    
+    solver.log_stats()
+
+    return ke_tavg, solver.sim_time
 
 
-# todo: main driver of the experiment here -- either a while or for loop that steps through changes in gamma, defines input args, etc.
+## begin experiment
+gamma_run = gammai
+
+counter = 1
+
+if gammai < gammaf: 
+    sign = 1 
+elif gammai > gammaf:
+    sign = -1
+else:
+    logger.info('poor specification of inputs') 
+    logger.info('testing this')
+    sign = 1
+
+dgamma = sign * np.abs(dgamma)
+
+while sign * (gammaf - gamma_run) >= 0:
+    if counter == 1:
+        if restart:
+            gamma_run += dgamma
+            use_bool = True
+            state_str = restart_dir
+        else:
+            use_bool = False
+            state_str = ''
+        #handler_str = 'overwrite' # for now, always going to make new output folders
+        #an_str = 'analysis_' + output_suffix
+        #cp_str = 'checkpoints_' + output_suffix
+    else:
+        use_bool = False
+        state_str = ''
+        #state_str = cp_str + '_s%d'.format(counter-1) + '.h5'
+        #handler_str = 'append'
+        #an_str = 'analysis_' + output_suffix
+        #cp_str = 'checkpoints_' + output_suffix
+    #if counter == 1 and restart:
+    #    gamma_run += dgamma
+        
+
+    exp_vars = [gamma_run, ke_dt, ke_rtol_mm, ke_rtol_lin]
+    #start_vars = [use_bool, state_str, handler_str, an_str, cp_str]
+    start_vars = [use_bool, state_str]
+    ke_out, t_out = run_solver(exp_vars, start_vars)
 
 
+    logger.info('solver exiting with ke_out = %e at t_out=%e' %(ke_out, t_out))
 
+    gamma_run += dgamma
+    counter += 1
+
+    # temporary
+    if dgamma == 0:
+        gamma_run += 1
+
+logger.info('ending')
