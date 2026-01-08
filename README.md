@@ -9,3 +9,6 @@ Our current simulation setup uses a Fourier-Zernike basis for the full unit disk
 We are currently working on implementing: 
 - processing algorithms for tracking (anti)cyclone centers and obtaining empirical distributions of their displacement from the axis of rotation
 - simulations with nonzero initial conditions to investigate the effects of nontrivial potential vorticity homogenization
+
+
+Run tracking (only people with access can view: https://docs.google.com/spreadsheets/d/1bsnZvAs-wktWhdLxIKowiOoRvWImXO98eykP2KUylAo/edit?gid=0#gid=0) 
