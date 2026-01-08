@@ -2,17 +2,25 @@
 Dini spectra
 
 Usage:
-    process_spectra_zb_dini.py [options]
+    process_spectra_zb_dini.py <file>... [options]
 
-Options:    
-    --gamma=<float>             strength of gamma effect (2 \Omega / a_p^2) [default: 3e1]
+Options:
+    --output=<str>              Prefix in name of output file [default: processed_spectra_zb_dini]
+    --t_out_start=<float>       Simulation time to begin making spectra [default: 0.]
+    --t_out_end=<float>         Simulation time to stop making spectra [default: 100.]
+    --t_steady_range=<float>    Size of time window prior to t_out_end to average over as "steady state" [default: 50.]
+    --make_new=<bool>           Remake the Bessel to Zernike MMT matrices [default: False]
+    --use_forcing=<bool>        Use script to examine spectra after one timestep [default: False]
+    --coeff_not_grid=<bool>     Initialize RHS of psi bvp equation from coeff space [default: False]
+    --use_direct=<bool>         Obtain KE and EN directly from vort, rather than psi [default: True]
+    --avoid_bvp=<bool>          Avoid BVP solves [default: True]
 """
 import numpy as np
 import h5py
 import scipy.special as sp
 from scipy.optimize import newton
 import dedalus.public as d3
-from mpi4py import MPI
+from mpi4py import MPI 
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -24,36 +32,63 @@ rank = comm.Get_rank()
 
 from docopt import docopt
 args = docopt(__doc__)
-
 logger.info("args read in")
 if rank == 0:
     print(args)
 
-gamma = float(args['--gamma'])
+def str_to_float(a):
+    first = float(a[0])
+    try:
+        sec = float(a[2]) # if str begins with format XdY
+    except:
+        sec = 0 
+    exp = int(a[-2:])
+    return (first + sec/10) * 10**(exp)
 
-##### Options #####
-make_new = False #--True if we need to remake the Bessel to Zernike MMT matrices
-use_forcing = False #--True if we want to look at the spectrum after one time step due to forcing
-coeff_not_grid = False #--True if we want to initialize the RHS of the psi bvp equation from coeff space
-use_direct = True # get ke and en directly from vort, rather than psi
-avoid_bvp = True #--True to save time by avoiding bvp solves
+file_str = args['<file>'][0]
+print(file_str)
+output_suffix = file_str.split('analysis_')[1].split('.')[0].split('/')[0] #[:-1] 
+Nphi = int(output_suffix.split('Nphi_')[1].split('_')[0])
+Nr = int(output_suffix.split('Nr_')[1].split('_')[0])
+ring = int(output_suffix.split('ring_')[1].split('_')[0])
 
-# Read in parameters
-Nphi, Nr = 512, 256
-nu = 2e-4
-#gamma = #1920 #240 #675 #1920
-k_force = 20
-alpha = 1e-2
-amp = 1
-ring = 0
-restart_evolved = False #False #True
-old = False #True #False
-if old:
-    eps = 2 * amp**2
-else:
-    eps = amp**2
+alpha_str = output_suffix.split('alpha_')[1].split('_')[0]
+gamma_str = output_suffix.split('gam_')[1].split('_')[0]
+eps_str = output_suffix.split('eps_')[1].split('_')[0]
+nu_str = output_suffix.split('nu_')[1].split('_')[0]
+kf_str = output_suffix.split('kf_')[1].split('_')[0]
 
-##### Setup #####
+alpha_read = str_to_float(alpha_str)
+gamma_read = str_to_float(gamma_str)
+eps_read = str_to_float(eps_str)
+nu_read = str_to_float(nu_str)
+kf_read = str_to_float(kf_str)
+
+alpha_vals = np.array((1e-2, 3.3e-2))
+gamma_vals = np.array((0, 30, 85, 240, 400, 675, 1200, 1920, 2372, 2500, 3200))
+eps_vals = np.array([1.0, 2.0])
+nu_vals = np.array([2e-4, 8e-5, 4e-5, 2e-5])
+kf_vals = np.array((20, 40, 80))
+
+alpha = alpha_vals[np.argmin(np.abs(alpha_vals - alpha_read))]
+gamma = gamma_vals[np.argmin(np.abs(gamma_vals - gamma_read))]
+eps = eps_vals[np.argmin(np.abs(eps_vals - eps_read))]
+nu = nu_vals[np.argmin(np.abs(nu_vals - nu_read))]
+k_force = kf_vals[np.argmin(np.abs(kf_vals - kf_read))]
+
+amp = np.sqrt(eps)
+
+output_prefix = args['--output']
+t_out_start = float(args['--t_out_start'])
+t_out_end = float(args['--t_out_end'])
+t_steady_range = float(args['--t_steady_range'])
+make_new = eval(args['--make_new'])
+use_forcing = eval(args['--use_forcing'])
+coeff_not_grid = eval(args['--coeff_not_grid'])
+use_direct = eval(args['--use_direct'])
+avoid_bvp = eval(args['--avoid_bvp'])
+
+### Setup
 
 def robin_func(r, m, H):
     return np.real(r * sp.jvp(m, r, n=1) + H * sp.jv(m, r))
@@ -86,8 +121,6 @@ def J_roots(m, Nr):
     return sp.jn_zeros(m, Nr)
 
 def zern2dini(m, Nr, dini_zsm):
-    #H = 1
-    #dini_zs = dini_roots(m, Nr, H)
     nstart = int(np.floor(m/2))
     ZBm = np.zeros((Nr, Nr))
     for i in range(Nr):
@@ -106,8 +139,7 @@ def zern2grid(m, Nr, r):
     return ZGm
 
 def dini2grid(m, Nr, r, dini_zs):
-    #H = 1 
-    dini_zsm = dini_zs[m, :] #= dini_roots(m, Nr, H)
+    dini_zsm = dini_zs[m, :]
     BGm = np.zeros((Nr, Nr))
     for i in range(Nr):
         for j in range(Nr):
@@ -155,41 +187,42 @@ def m_map(m, Nphi):
     return m_out
 
 def psi2vort(m, Nr, psim, dini_zs):
-    #H = 1
-    jzsm = dini_zs[m, :] #dini_roots(m, Nr, H)
+    jzsm = dini_zs[m, :]
     return - jzsm**2 * psim
 
 def ke_m(m, Nr, psimc, psims, dini_zs):
     jzsm = dini_zs[m, :]
     dini_weight_m = dini_weights(m, jzsm)
-    return 0.5 * jzsm * dini_weight_m * (np.abs(psimc) + np.abs(psims))
+    #return jzsm**2 * (psimc**2 + psims**2) * (2 / Nphi) * dini_weight_m
+    if m == 0:
+        return 2 * np.pi * dini_weight_m * 0.5 * jzsm**2 * psimc**2
+    else:
+        return np.pi * dini_weight_m * 0.5 * jzsm**2 * (psimc**2 + psims**2)
 
 def en_m(m, Nr, psimc, psims, dini_zs):
     jzsm = dini_zs[m, :] 
     dini_weight_m = dini_weights(m, jzsm)
-    return jzsm**2 * dini_weight_m * (np.abs(psimc) + np.abs(psims))
+    #return jzsm**4 * (psimc**2 + psims**2) * (2 / Nphi) * dini_weight_m 
+    if m == 0:
+        return 2 * np.pi * dini_weight_m * jzsm**4 * psimc**2
+    else:
+        return np.pi * dini_weight_m * jzsm**4 * (psimc**2 + psims**2)
 
 def vort2psi(m, Nr, vortm, dini_zs):
     jzsm = dini_zs[m, :]
     return vortm / (- jzsm**2)
 
 def ke_m_direct(m, Nr, vortmc, vortms, dini_zs):
-    jzsm = dini_zs[m, :]
-    dini_weight_m = dini_weights(m, jzsm)
     psimc = vort2psi(m, Nr, vortmc, dini_zs)
     psims = vort2psi(m, Nr, vortms, dini_zs) 
     return ke_m(m, Nr, psimc, psims, dini_zs)
 
 def en_m_direct(m, Nr, vortmc, vortms, dini_zs):
-    jzsm = dini_zs[m, :]
-    dini_weight_m = dini_weights(m, jzsm)
     psimc = vort2psi(m, Nr, vortmc, dini_zs)
     psims = vort2psi(m, Nr, vortms, dini_zs)
     return en_m(m, Nr, psimc, psims, dini_zs)
 
 def define_bins(dini_zs, case):
-    #Nbins = np.ceil((dini_zs.max() - dini_zs.min()) / np.pi).astype(int)
-    #centers = dini_zs.min() + np.pi * np.arange(Nbins)
     Nbins = np.ceil((dini_zs.max() - np.pi) / np.pi).astype(int)
     centers = np.pi * np.arange(1, Nbins + 1)
     edges = centers - np.pi/2
@@ -198,10 +231,6 @@ def define_bins(dini_zs, case):
     masks = {}
     for b in range(Nbins):
         mask = np.logical_and((dini_zs <= edges[b+1]), (dini_zs >= edges[b]))
-        #if case == 'zonal' and b == 0:
-        #    print(dini_zs)
-        #    print(edges[b], edges[b+1])
-        #    print(mask)
         if case == 'zonal':
             mask[1:, :] = False
         elif case == 'non_zonal':
@@ -211,32 +240,25 @@ def define_bins(dini_zs, case):
         masks[b] = mask
     return Nbins, centers, edges, counts, masks
 
-#def bin_spectra(data, Nbins, counts, masks):
 def bin_spectra(data, Nbins, masks, case):
     nspec = []
     for b in range(Nbins):
         mask = masks[b]
         bin_sum = np.sum(data[mask])
         nspec.append(bin_sum)
-        #if ((case == 'zonal') or (case == 'non_zonal')) and b < 3:
-        #    print(case, mask.shape, mask)            
-        #weighted_sum = np.sum(data[mask]) / counts[b]
-        #nspec.append(weighted_sum)
     return nspec
 
-#output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.0e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) + '_ring_0'
-#output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
-#output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
-output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.1e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) 
-output_suffix += '_eps_{:.1e}'.format(eps)
-output_suffix += '_alpha_{:.1e}'.format(alpha)
-output_suffix += '_ring_{:d}'.format(ring)
-output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
-output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
-
 # Load in analysis data
-f = h5py.File('../jupiter-run/analysis_' + output_suffix + '/analysis_' + output_suffix + '_s1.h5')
+#f = h5py.File('../jupiter-run/analysis_' + output_suffix + '/analysis_' + output_suffix + '_s1.h5')
+#print(f['tasks/u'].dims[0]['sim_time'])
+#print(f['scales']['sim_time'])
+
 #f = h5py.File('/anvil/projects/x-mth250004/jupiter/' + output_suffix + '/analysis_' + output_suffix + '/analysis_' + output_suffix + '_s1.h5')
+f = h5py.File(file_str)
+#t = np.array(f['tasks/u'].dims[0]['sim_time'])
+#print(t)
+#print(f['scales']['sim_time'])
+#print(f['tasks']['u'].dims[0]['sim_time'])
 t = np.array(f['tasks/u'].dims[0]['sim_time'])
 
 dealias = 3/2 
@@ -381,23 +403,14 @@ else:
     dir_path = Path(filedir)
     dir_path.mkdir(parents=True, exist_ok=True)
     np.save(filedir + filename, ZBs, allow_pickle=True)
-    
+logger.info('Finished accessing or building matrices')
+
 # Define writes to make spectra of 
 if use_forcing:
     ws = [1]
 else:
-    t_out_start = 0.
-    if gamma != 0.:
-        t_out_end = 285.
-    else:
-        t_out_end = 195.
+    print(t, t_out_start, t_out_end)
     ws = np.arange(np.where(t <= t_out_start)[0][-1], np.where(t >= t_out_end)[0][0] + 1)
-    #t_per_w = 0.02
-    #t_out_start = 0.
-    #t_out_end = 299.
-    #ws = np.arange(int(t_out_start/t_per_w), int(t_out_end/t_per_w) + 1)
-    #ws = [1900, 1910, 1920, 1930, 1940, 1950, 1960, 1970, 1980, 1990, 2000]
-    #ws = np.linspace(700, 900, 21).astype(int)
 
 nw = len(ws)
 tw = t[ws] # w = 0 corresponds to t = 0
@@ -432,9 +445,6 @@ enBn_zonal = np.zeros((nw, Nbins))
 _, _, _, _, non_zonal_masks = define_bins(jzs_dini, 'non_zonal')
 keBn_nz = np.zeros((nw, Nbins))
 enBn_nz = np.zeros((nw, Nbins))
-
-print(Nbins, centers/(2*np.pi), edges/(2*np.pi))
-raise
 
 prog_cad = 10
 for i, w in enumerate(ws):
@@ -548,7 +558,7 @@ for i, w in enumerate(ws):
             vortBs = (ZB @ vortZ[i, midxs, :][0, :]).reshape(1, Nr) 
             vortB[i, midxc, :] = vortBc
             vortB[i, midxs, :] = vortBs
-                
+
             if use_direct:
                 keB[i, m, :] = ke_m_direct(m, Nr, vortBc, vortBs, jzs_dini)
                 enB[i, m, :] = en_m_direct(m, Nr, vortBc, vortBs, jzs_dini)
@@ -616,7 +626,7 @@ if rank == 0:
     if len(ws) > 1:
     
         tavg_end = tw[-1]
-        tavg_start = tavg_end - 2.5e1
+        tavg_start = tavg_end - t_steady_range#2.5e1
         tavg_end_idx = np.where(tw <= tavg_end)[0][-1]
         tavg_start_idx = np.where(tw >= tavg_start)[0][0]
 
@@ -648,14 +658,7 @@ if rank == 0:
 
     logger.info("Saving on rank %d" %(rank))
 
-    if use_forcing:
-        if coeff_not_grid:
-            opt_str = 'c'
-        else:
-            opt_str = 'g'
-        np.save('processed_spectra_zb_dini_' + output_suffix + '_F_' + opt_str + '.npy', processed)
-    else:
-        np.save('processed_spectra_zb_dini_' + output_suffix + '.npy', processed)
+    np.save(output_prefix + '_' + output_suffix + '.npy', processed)
 else:
     logger.info("Rank %d is done" %(rank))
 
