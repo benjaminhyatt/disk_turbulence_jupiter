@@ -1,48 +1,56 @@
+"""
+Usage:
+    process_scalars.py <file>... [options]
+
+Options:    
+    --output=<str>               prefix in the name of the output file [default: processed_scalars]
+"""
+
+
 import numpy as np
 import h5py
+from docopt import docopt
+args = docopt(__doc__)
 
-Nphi, Nr = 1536, 768 #512, 256 #1024, 512 #512, 256 #640, 320 #768, 384 #512, 256 #1024, 512 
-nu = 4e-5 #2e-4 #4e-5 #2e-4 #8e-5 #1e-3 #2e-4 #1e-4 #2e-4 #8e-5 #5e-5
-gamma = 2500 #1920 #400 #240 #2372 #1920 #240 #675 #85 #0 #1920 #240 #30
-k_force = 40 #20 #40 #20 #80 #20 #20 #70 #35 #20 #50
+def str_to_float(a):
+    first = float(a[0])
+    try:
+        sec = float(a[2]) # if str begins with format XdY
+    except:
+        sec = 0
+    exp = int(a[-2:])
+    return (first + sec/10) * 10**(exp)
 
-alpha = 3.3e-2 #1e-2
-amp = 1
+print("args read in")
+print(args)
 
-ring = 0
+output_prefix = args['--output']
 
-restart_evolved = False #False #True
+file_str = args['<file>'][0]
+output_suffix = file_str.split('analysis_')[1].split('.')[0].split('/')[0] #[:-1] 
+print(output_suffix)
 
-restart_hyst = False #True
-hystn = 7
+alpha_str = output_suffix.split('alpha_')[1].split('_')[0]
+eps_str = output_suffix.split('eps_')[1].split('_')[0]
+nu_str = output_suffix.split('nu_')[1].split('_')[0]
+alpha_read = str_to_float(alpha_str)
+eps_read = str_to_float(eps_str)
+nu_read = str_to_float(nu_str)
 
-old = False
-if old:
-    eps = 2 * amp**2
-else:
-    eps = amp**2
+alpha_vals = np.array((1e-2, 3.3e-2))
+eps_vals = np.array([1.0, 2.0])
+nu_vals = np.array([2e-4, 8e-5, 4e-5, 2e-5])
 
-#output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.0e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) + '_ring_0'
-#output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
-#output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
-
-output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.1e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) 
-output_suffix += '_eps_{:.1e}'.format(eps)
-output_suffix += '_alpha_{:.1e}'.format(alpha)
-output_suffix += '_ring_{:d}'.format(ring)
-output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
-output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
-
-if restart_hyst:
-    output_suffix += '_restart_hyst_{:d}'.format(hystn)
+alpha = alpha_vals[np.argmin(np.abs(alpha_vals - alpha_read))]
+eps = eps_vals[np.argmin(np.abs(eps_vals - eps_read))]
+nu = nu_vals[np.argmin(np.abs(nu_vals - nu_read))]
+print(alpha, eps, nu)
 
 
 # load in analysis
-print("loading primary run")
-f1 = h5py.File('../jupiter-run/analysis_' + output_suffix + '/analysis_' + output_suffix + '_s2.h5')
-#f1 = h5py.File('../jupiter-run/analysis_' + output_suffix + '/analysis_' + output_suffix + '_s1.h5')
-#f1 = h5py.File('../jupiter-run/analysis_' + output_suffix + '/analysis_' + output_suffix + '/analysis_' + output_suffix + '_s1.h5')
+f1 = h5py.File(file_str)
 t = f1['tasks/KE'].dims[0]['sim_time'][:]
+
 
 #Lzu = f1['tasks/Lzu'][:, 0, 0]
 KE = f1['tasks/KE'][:, 0, 0]
@@ -53,14 +61,7 @@ EN = f1['tasks/EN'][:, 0, 0]
 #PAbdry1 = f1['tasks/PAbdry1'][:, 0, 0]
 #PAbdry2 = f1['tasks/PAbdry2'][:, 0, 0]
 
-
-if old: # used Integrate, want avg
-    #Lzu *= 1/(np.pi)
-    KE *= 1/(np.pi)
-    EN *= 1/(np.pi)
-
-# temporal averages
-tdur = 5 #50 
+tdur = 30 #100 
 tendidx = -1
 tend = t[tendidx]
 tstartidx = np.where(t >= tend - tdur)[0][0]
@@ -69,8 +70,7 @@ tstart = t[tstartidx]
 KE_tavg = np.mean(KE[tstartidx:tendidx])
 EN_tavg = np.mean(EN[tstartidx:tendidx])
 KE_tavg_expected = ((eps / np.pi) - nu * EN_tavg) / (2 * alpha)
-#print(KE_tavg, EN_tavg)
-#print(KE_tavg_expected)
+print(EN_tavg)
 processed = {}
 processed['t'] = t
 #processed['Lzu'] = Lzu
@@ -85,6 +85,5 @@ processed['EN_tavg'] = EN_tavg
 processed['KE_growth_pred'] = (eps/(np.pi)) * t # these are predicted for area-average, i.e., 1/pi * K_tot 
 processed['KE_tavg_expected'] = KE_tavg_expected
 
-
 print('saving output')
-np.save('processed_scalars_' + output_suffix + '.npy', processed)
+np.save(output_prefix + '_' + output_suffix + '.npy', processed)

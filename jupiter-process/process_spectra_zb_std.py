@@ -1,15 +1,15 @@
 """
-Dini spectra
+Bessel spectra
 
 Usage:
-    process_spectra_zb_dini.py <file>... [options]
+    process_spectra_zb_std.py <file>... [options]
 
 Options:
-    --output=<str>              Prefix in name of output file [default: processed_spectra_zb_dini]
+    --output=<str>              Prefix in name of output file [default: processed_spectra_zb]
     --t_out_start=<float>       Simulation time to begin making spectra [default: 0.]
     --t_out_end=<float>         Simulation time to stop making spectra [default: 100.]
     --t_steady_range=<float>    Size of time window prior to t_out_end to average over as "steady state" [default: 50.]
-    --make_new=<bool>           Remake the Zernike to Dini MMT matrices [default: False]
+    --make_new=<bool>           Remake the Zernike to Bessel MMT matrices [default: False]
     --use_forcing=<bool>        Use script to examine spectra after one timestep [default: False]
 """
 import numpy as np
@@ -72,7 +72,6 @@ eps = eps_vals[np.argmin(np.abs(eps_vals - eps_read))]
 nu = nu_vals[np.argmin(np.abs(nu_vals - nu_read))]
 k_force = kf_vals[np.argmin(np.abs(kf_vals - kf_read))]
 
-dealias = 3/2
 amp = np.sqrt(eps)
 
 output_prefix = args['--output']
@@ -83,43 +82,19 @@ make_new = eval(args['--make_new'])
 use_forcing = eval(args['--use_forcing'])
 
 ### Setup
-def robin_func(r, m, H):
-    return np.real(r * sp.jvp(m, r, n=1) + H * sp.jv(m, r))
-
-def robin_func_prime(r, m, H):
-    return np.real(r * sp.jvp(m, r, n=2) + (H + 1) * sp.jvp(m, r, n=1))
-
-def dini_roots(m, Nr, H):
-    jmp_zs = sp.jnp_zeros(m, Nr + 1)
-    djmp_zs = np.diff(jmp_zs)
-    r0 = sp.jnp_zeros(m, 1)
-    roots = []
-    for nidx in range(Nr):
-        rout, results = newton(robin_func, r0, fprime=robin_func_prime, args = (m, H), tol=1e-10, full_output=True)
-        # catches 
-        if rout[0] <= 0:
-            print("encountered a negative root")
-            raise
-        if rout[0] in np.unique(roots):
-            print("caution: found a duplicate")
-        roots.append(rout[0])
-        r0 = rout + djmp_zs[nidx]
-    return roots
-
-def dini_weights(m, dini_zsm):
-    H = 1
-    return ((H**2 + dini_zsm**2 - m**2) * sp.jv(m, dini_zsm)**2) / (2 * dini_zsm**2)
-
 def J_roots(m, Nr):
     return sp.jn_zeros(m, Nr)
 
-def zern2dini(m, Nr, dini_zsm):
+def J_weights(m, J_zsm):
+    return (sp.jv(m + 1, J_zsm)**2) / 2
+
+def zern2J(m, Nr, J_zsm):
     nstart = int(np.floor(m/2))
     ZBm = np.zeros((Nr, Nr))
     for i in range(Nr):
         for j in range(nstart, Nr):
             jj = j - nstart + 1
-            ZBm[i, j] = (-1)**(jj - 1) * np.sqrt(2 * (2*jj + m - 1)) * (2 * dini_zsm[i] * sp.jv(2*jj + m - 1, dini_zsm[i])) / ((H**2 + dini_zsm[i]**2 - m**2) * sp.jv(m, dini_zsm[i])**2)
+            ZBm[i, j] = (-1)**(jj - 1) * np.sqrt(2 * (2*jj + m - 1)) * (2 * sp.jv(2*jj + m - 1, J_zsm[i])) / (J_zsm[i] * sp.jv(m + 1, J_zsm[i])**2)
     return ZBm
 
 def zern2grid(m, Nr, r):
@@ -131,20 +106,21 @@ def zern2grid(m, Nr, r):
             ZGm[i, j] = r[i]**m * sp.eval_jacobi(jj - 1, 0, m, 2*r[i]**2 - 1) * np.sqrt(2*(2*jj + m - 1))
     return ZGm
 
-def dini2grid(m, Nr, r, dini_zsm):
+def J2grid(m, Nr, r, J_zsm):
     BGm = np.zeros((Nr, Nr))
     for i in range(Nr):
         for j in range(Nr):
-            BGm[i, j] = sp.jv(m, dini_zsm[j] * r[i]) 
+            BGm[i, j] = sp.jv(m, J_zsm[j] * r[i]) 
     return BGm
 
-def makeZBs(Nr, Nphi, dini_zs):
+def makeZBs(Nr, Nphi, jzs):
     mmax = int(Nphi/2) - 1
     ZBs = {}
-    prog_cad = 10
+    prog_cad = 32
     for m in range(mmax + 1):
-        dini_zsm = dini_zs[m, :]
-        ZBs[m] = zern2dini(m, Nr, dini_zsm)
+        #J_zsm = J_roots(m, Nr)
+        J_zsm = jzs[m, :]
+        ZBs[m] = zern2J(m, Nr, J_zsm)
         if m % prog_cad == 0:
             logger.info("makeZB loop: m = %d out of %d" %(m, mmax))
     return ZBs
@@ -152,19 +128,21 @@ def makeZBs(Nr, Nphi, dini_zs):
 def makeZGs(Nr, Nphi, r):
     mmax = int(Nphi/2) - 1
     ZGs = {}
-    prog_cad = 10
+    prog_cad = 32
     for m in range(mmax + 1):
         ZGs[m] = zern2grid(m, Nr, r)
         if m % prog_cad == 0:
             logger.info("makeZG loop: m = %d out of %d" %(m, mmax))
     return ZGs
 
-def makeBGs(Nr, Nphi, r, dini_zs):
+def makeBGs(Nr, Nphi, r, jzs):
     mmax = int(Nphi/2) - 1
     BGs = {}
-    prog_cad = 10
+    prog_cad = 32
     for m in range(mmax + 1):
-        BGs[m] = dini2grid(m, Nr, r, dini_zs[m, :])
+        #J_zsm = J_roots(m, Nr)
+        J_zsm = jzs[m, :]
+        BGs[m] = J2grid(m, Nr, r, J_zsm)
         if m % prog_cad == 0:
             logger.info("makeBG loop: m = %d out of %d" %(m, mmax))
     return BGs
@@ -178,48 +156,48 @@ def m_map(m, Nphi):
     m_out[mask] = Nphi - 2 - 4 * (m_in[mask] - int(Nphi/4))
     return m_out
 
-def ke_m(m, Nr, psimc, psims, dini_zs):
-    jzsm = dini_zs[m, :]
-    dini_weight_m = dini_weights(m, jzsm)
+def ke_m(m, Nr, psimc, psims, J_zsm):
+    #J_zsm = J_roots(m, Nr)
+    J_weight_m = J_weights(m, J_zsm)
     if m == 0:
-        return 2 * np.pi * dini_weight_m * 0.5 * jzsm**2 * psimc**2
+        return 2 * np.pi * J_weight_m * 0.5 * J_zsm**2 * psimc**2
     else:
-        return np.pi * dini_weight_m * 0.5 * jzsm**2 * (psimc**2 + psims**2)
+        return np.pi * J_weight_m * 0.5 * J_zsm**2 * (psimc**2 + psims**2)
 
-def en_m(m, Nr, psimc, psims, dini_zs):
-    jzsm = dini_zs[m, :] 
-    dini_weight_m = dini_weights(m, jzsm)
+def en_m(m, Nr, psimc, psims, J_zsm):
+    #J_zsm = J_roots(m, Nr) 
+    J_weight_m = J_weights(m, J_zsm)
     if m == 0:
-        return 2 * np.pi * dini_weight_m * jzsm**4 * psimc**2
+        return 2 * np.pi * J_weight_m * J_zsm**4 * psimc**2
     else:
-        return np.pi * dini_weight_m * jzsm**4 * (psimc**2 + psims**2)
+        return np.pi * J_weight_m * J_zsm**4 * (psimc**2 + psims**2)
 
-def vort2psi(m, Nr, vortm, dini_zs):
-    jzsm = dini_zs[m, :]
-    return vortm / (- jzsm**2)
+def vort2psi(m, Nr, vortm, J_zsm):
+    #J_zsm = J_roots(m, Nr)
+    return vortm / (-J_zsm**2)
 
-def ke_m_direct(m, Nr, vortmc, vortms, dini_zs):
-    psimc = vort2psi(m, Nr, vortmc, dini_zs)
-    psims = vort2psi(m, Nr, vortms, dini_zs) 
-    return ke_m(m, Nr, psimc, psims, dini_zs)
+def ke_m_direct(m, Nr, vortmc, vortms, jzsm):
+    psimc = vort2psi(m, Nr, vortmc, jzsm)
+    psims = vort2psi(m, Nr, vortms, jzsm) 
+    return ke_m(m, Nr, psimc, psims, jzsm)
 
-def en_m_direct(m, Nr, vortmc, vortms, dini_zs):
-    psimc = vort2psi(m, Nr, vortmc, dini_zs)
-    psims = vort2psi(m, Nr, vortms, dini_zs)
-    return en_m(m, Nr, psimc, psims, dini_zs)
+def en_m_direct(m, Nr, vortmc, vortms, jzsm):
+    psimc = vort2psi(m, Nr, vortmc, jzsm)
+    psims = vort2psi(m, Nr, vortms, jzsm)
+    return en_m(m, Nr, psimc, psims, jzsm)
 
-# based on m = 0 dini_zs (slightly different)
-def define_bins(dini_zs, case):
-    centers = dini_zs[0, :]
+# the m=0 roots (nearly the same)
+def define_bins(J_zs, case):
+    centers = J_zs[0, :]
     Nbins = centers.shape[0]
     #edges = np.array([(centers[ii] - centers[ii - 1])/2 for ii in range(1, Nbins)])
     #edges = np.concatenate(([centers[0]/2], edges, [centers[-1] + np.pi/2]))
     edges = np.array([centers[ii] - 0.5*(centers[ii] - centers[ii - 1]) for ii in range(1, Nbins)])
-    edges = np.concatenate(([0.], edges, [centers[-1] + np.pi/2]))
+    edges = np.concatenate(([0.], edges,  [centers[-1] + np.pi/2]))
     counts = []
     masks = {}
     for b in range(Nbins):
-        mask = np.logical_and((dini_zs <= edges[b+1]), (dini_zs >= edges[b]))
+        mask = np.logical_and((J_zs <= edges[b+1]), (J_zs >= edges[b]))
         if case == 'zonal':
             mask[1:, :] = False
         elif case == 'non_zonal':
@@ -227,17 +205,17 @@ def define_bins(dini_zs, case):
         count = np.sum(mask)
         counts.append(count)
         masks[b] = mask
-    return Nbins, centers, edges, counts, masks 
-# based on integer multiples of pi
-#def define_bins(dini_zs, case):
-#    Nbins = np.ceil((dini_zs.max() - np.pi) / np.pi).astype(int)
+    return Nbins, centers, edges, counts, masks
+# integer multiples of pi
+#def define_bins(J_zs, case):
+#    Nbins = np.ceil((J_zs.max() - np.pi) / np.pi).astype(int)
 #    centers = np.pi * np.arange(1, Nbins + 1)
 #    edges = centers - np.pi/2
 #    edges = np.concatenate((edges, [centers[-1] + np.pi/2]))
 #    counts = [] # histogram
 #    masks = {}
 #    for b in range(Nbins):
-#        mask = np.logical_and((dini_zs <= edges[b+1]), (dini_zs >= edges[b]))
+#        mask = np.logical_and((J_zs <= edges[b+1]), (J_zs >= edges[b]))
 #        if case == 'zonal':
 #            mask[1:, :] = False
 #        elif case == 'non_zonal':
@@ -259,6 +237,7 @@ def bin_spectra(data, Nbins, masks, case):
 f = h5py.File(file_str)
 t = np.array(f['tasks/u'].dims[0]['sim_time'])
 
+dealias = 3/2
 dtype = np.float64
 coords = d3.PolarCoordinates('phi', 'r')
 dist = d3.Distributor(coords, dtype = dtype)
@@ -382,21 +361,19 @@ if use_forcing:
 ##### Begin processing #####
 mmax = int(Nphi/2) - 1
 ms = np.arange(mmax + 1)
-# Dini setup
-H = 1
-jzs_dini = np.zeros((mmax + 1, Nr))
+J_zs = np.zeros((mmax + 1, Nr))
 for m in range(mmax + 1):
-    jzs_dini[m, :] = dini_roots(m, Nr, H)
+    J_zs[m, :] = J_roots(m, Nr)
 
 # Build matrices
-filedir = 'mmts_dini_Nr_{:}'.format(Nr) + '_Nphi_{:}'.format(Nphi) + '/'
-filename = 'zb_dini_Nr_{:}'.format(Nr) + '_Nphi_{:}'.format(Nphi) + '.npy'
+filedir = 'mmts_J_Nr_{:}'.format(Nr) + '_Nphi_{:}'.format(Nphi) + '/'
+filename = 'zb_J_Nr_{:}'.format(Nr) + '_Nphi_{:}'.format(Nphi) + '.npy'
 if not make_new:
     ZBs = np.load(filedir + filename, allow_pickle=True)[()]
     logger.info('ZBs load successful')
 else:
     logger.info('ZBs not found, proceeding to make from scratch')
-    ZBs = makeZBs(Nr, Nphi, jzs_dini)
+    ZBs = makeZBs(Nr, Nphi, J_zs)
     dir_path = Path(filedir)
     dir_path.mkdir(parents=True, exist_ok=True)
     np.save(filedir + filename, ZBs, allow_pickle=True)
@@ -409,7 +386,7 @@ else:
     ws = np.arange(np.where(t <= t_out_start)[0][-1], np.where(t >= t_out_end)[0][0] + 1)
 nw = len(ws)
 tw = t[ws] # w = 0 corresponds to t = 0
-
+print(nw, ws)
 # fields
 vort = dist.Field(name = 'vort', bases = disk) # scalar vertical vorticity
 psi = dist.Field(name = 'psi', bases = disk) # streamfunction
@@ -421,7 +398,7 @@ tau_psi2 = dist.Field(name='tau_psi2')
 vortZ = np.zeros((nw, Nphi, Nr))
 psiZ = np.zeros((nw, Nphi, Nr))
 
-# Dini coefficients
+# Bessel coefficients
 vortB = np.zeros((nw, Nphi, Nr))
 #psi2vortB = np.zeros((nw, Nphi, Nr))
 psiB = np.zeros((nw, Nphi, Nr))
@@ -437,15 +414,15 @@ keB = np.zeros((nw, int(Nphi/2), Nr))
 enB = np.zeros((nw, int(Nphi/2), Nr))
 
 # radial spectra
-Nbins, centers, edges, counts, masks = define_bins(jzs_dini, None)
+Nbins, centers, edges, counts, masks = define_bins(J_zs, None)
 keBn = np.zeros((nw, Nbins))
 enBn = np.zeros((nw, Nbins))
 
 # zonal and residual decompositon
-_, _, _, _, zonal_masks = define_bins(jzs_dini, 'zonal')
+_, _, _, _, zonal_masks = define_bins(J_zs, 'zonal')
 keBn_zonal = np.zeros((nw, Nbins))
 enBn_zonal = np.zeros((nw, Nbins))
-_, _, _, _, non_zonal_masks = define_bins(jzs_dini, 'non_zonal')
+_, _, _, _, non_zonal_masks = define_bins(J_zs, 'non_zonal')
 keBn_nz = np.zeros((nw, Nbins))
 enBn_nz = np.zeros((nw, Nbins))
 
@@ -469,9 +446,9 @@ for i, w in enumerate(ws):
         vortZ2Ggather = comm.gather(np.copy(vortrhs['g']), root = 0) # grid data (diagnostic)
         vortZgather = comm.gather(np.copy(vortrhs['c']), root = 0)
         if rank == 0:
-            vortZ2G[i, :, :] = np.array(vortZ2Ggather).reshape(Nphi, Nr) 
+            vortZ2G[i, :, :] = np.array(vortZ2Ggather).reshape(Nphi, Nr)
             vortZ[i, :, :] = np.array(vortZgather).reshape(Nphi, Nr)
-    
+
     else:
         vort.load_from_hdf5(f, w) 
         # saving
@@ -479,10 +456,9 @@ for i, w in enumerate(ws):
         if rank == 0:
             vortZ[i, :, :] = np.array(vortZgather).reshape(Nphi, Nr)
 
-    # Zernike to Dini
+    # Zernike to Bessel
     if rank == 0:
-        logger.info("Rank %d is mapping coefficients to Bessel (Dini) space" %(rank))
-        # 2d
+        logger.info("Rank %d is mapping coefficients to Bessel space" %(rank))
         for m in range(mmax + 1):
             if m % prog_cad == 0:
                 logger.info("main ZB loop: m = %d out of %d" %(m, mmax))
@@ -490,12 +466,12 @@ for i, w in enumerate(ws):
             midx = m_map(m, Nphi)
             midxc, midxs = (midx, midx + 1)
      
-            psiBc = (ZB @ psiZ[i, midxc, :][0, :]).reshape(1, Nr)
+            psiBc = (ZB @ psiZ[i, midxc, :][0, :]).reshape(1, Nr) # need to get!
             psiBs = (ZB @ psiZ[i, midxs, :][0, :]).reshape(1, Nr)
             psiB[i, midxc, :] = psiBc
             psiB[i, midxs, :] = psiBs
-            #psi2vortB[i, midxc, :] = psi2vort(m, Nr, psiBc, jzs_dini)
-            #psi2vortB[i, midxs, :] = psi2vort(m, Nr, psiBs, jzs_dini)
+            #psi2vortB[i, midxc, :] = psi2vort(m, Nr, psiBc)
+            #psi2vortB[i, midxs, :] = psi2vort(m, Nr, psiBs)
 
             vortBc = (ZB @ vortZ[i, midxc, :][0, :]).reshape(1, Nr) 
             vortBs = (ZB @ vortZ[i, midxs, :][0, :]).reshape(1, Nr) 
@@ -503,8 +479,8 @@ for i, w in enumerate(ws):
             vortB[i, midxs, :] = vortBs
 
             # spectra (2d)
-            keB[i, m, :] = ke_m_direct(m, Nr, vortBc, vortBs, jzs_dini)
-            enB[i, m, :] = en_m_direct(m, Nr, vortBc, vortBs, jzs_dini)
+            keB[i, m, :] = ke_m_direct(m, Nr, vortBc, vortBs, J_zs[m, :])
+            enB[i, m, :] = en_m_direct(m, Nr, vortBc, vortBs, J_zs[m, :])
 
         # spectra (summed over m)
         keBn[i, :] = bin_spectra(keB[i, :, :], Nbins, masks, None)
@@ -513,11 +489,13 @@ for i, w in enumerate(ws):
         enBn_zonal[i, :] = bin_spectra(enB[i, :, :], Nbins, zonal_masks, 'zonal')
         keBn_nz[i, :] = bin_spectra(keB[i, :, :], Nbins, non_zonal_masks, 'non_zonal')
         enBn_nz[i, :] = bin_spectra(enB[i, :, :], Nbins, non_zonal_masks, 'non_zonal')
-
+        
         if use_forcing:
             # grid data (diagnostic)
             for m in range(0, int(Nphi/2)):
-                Bm = dini2grid(m, Nr, r[0, :], jzs_dini[m, :]) 
+                if m % int(prog_cad/2) == 0:
+                    logger.info("grid space loop: m = %d out of %d" %(m, int(Nphi/2)))
+                Bm = J2grid(m, Nr, r[0, :], J_zs[m, :])
                 midx = m_map(m, Nphi)
                 if m == 0:
                     psiB2G[i, :, :] += (Bm @ psiB[i, midx, :][0, :]).reshape(1, Nr) * np.cos(m * phi)
@@ -528,7 +506,6 @@ for i, w in enumerate(ws):
                     vortB2G[i, :, :] += (Bm @ vortB[i, midx, :][0, :]).reshape(1, Nr) * (np.cos(m * phi))
                     vortB2G[i, :, :] += (Bm @ vortB[i, midx+1, :][0, :]).reshape(1, Nr) * (-np.sin(m * phi))
 
-
 if rank == 0:
     logger.info("Beginning final tasks on rank %d" %(rank))
 
@@ -538,17 +515,14 @@ if rank == 0:
     processed['ws'] = ws
     processed['ts'] = tw
     processed['ms'] = ms
-    processed['jzs_dini'] = jzs_dini
+    processed['J_zs'] = J_zs
 
     # coeff
     processed['vortZ'] = vortZ
     processed['psiZ'] = psiZ
-    processed['vortB'] = vortB # direct transform from vortZ to Bessel (Dini)
+    processed['vortB'] = vortB # direct transform from vortZ to Bessel
     #processed['psi2vortB'] = psi2vortB # Laplacian of psiB
-    processed['psiB'] = psiB # direct transform of psiZ to Bessel (Dini)
-
-    print(vortZ)
-    print(vortB)
+    processed['psiB'] = psiB # direct transform of psiZ to Bessel
 
     # grid (diagnostic)
     if use_forcing:
