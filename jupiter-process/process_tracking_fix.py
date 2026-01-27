@@ -127,6 +127,8 @@ theta_mesh = theta_mesh.T
 ### determine subset of grid points and vorticity data to pass to spline fit ###
 def choose_mesh(lon_mesh, lat_mesh, data, lon_idx, lat_idx, Nlon, Nlat, size_lon, size_lat):
 
+    print("choose_mesh beginning: data shape", data.shape)
+
     ### store additional info for later calls to test and bins functions ###
     bounds = {}
 
@@ -136,6 +138,10 @@ def choose_mesh(lon_mesh, lat_mesh, data, lon_idx, lat_idx, Nlon, Nlat, size_lon
     lon_sub_mesh_cut1 = lon_mesh[:, lat_idx_inner:lat_idx_outer + 1]
     lat_sub_mesh_cut1 = lat_mesh[:, lat_idx_inner:lat_idx_outer + 1]
     data_cut1 = data[:, lat_idx_inner:lat_idx_outer + 1]
+
+    print("choose_mesh post lat cut: data shape", data_cut1.shape)
+    print("choose_mesh lat_sub_mesh", lat_sub_mesh_cut1, lat_sub_mesh_cut1.shape)
+    print("choose_mesh lon_sub_mesh", lon_sub_mesh_cut1, lon_sub_mesh_cut1.shape)
 
     bounds['lat_idxs'] = [lat_idx_inner, lat_idx_outer]
     bounds['lat_sub_mesh_g'] = lat_sub_mesh_cut1[0, :]
@@ -233,6 +239,10 @@ def choose_mesh(lon_mesh, lat_mesh, data, lon_idx, lat_idx, Nlon, Nlat, size_lon
         bounds['lon_ab_flag'] = None
         bounds['lon_a_bds'] = None
         bounds['lon_b_bds'] = None
+
+    print("choose_mesh post lon cut: data shape", data_sub.shape)
+    print("choose_mesh lat_sub_mesh", lat_sub_mesh, lat_sub_mesh.shape)
+    print("choose_mesh lon_sub_mesh", lon_sub_mesh, lon_sub_mesh.shape)
 
     return lon_sub_mesh, lat_sub_mesh, data_sub, bounds
 
@@ -408,7 +418,7 @@ for i, w in enumerate(ws):
     # load vorticity grid data
     vort.load_from_hdf5(f, w)
     vort_g = np.copy(vort['g'])
-    
+    print(i, "vort_g shape", vort_g.shape)    
     # fit grid data to normal distribution
     mu_fit, stddev_fit = norm.fit(vort_g)
     vort_mus.append(mu_fit)
@@ -458,6 +468,9 @@ for i, w in enumerate(ws):
     lon_pois.append(phi_mesh[lon_poi_idx, 0])
     lat_pois.append(theta_mesh[0, lat_poi_idx])
 
+    print(i, "phi_mesh shape", phi_mesh.shape)
+    print(i, "theta_mesh shape", theta_mesh.shape)
+
     # determine local mesh to pass to spline fit
     Nphi_deal = int(np.round(dealias * Nphi))
     Nr_deal = int(np.round(dealias * Nr))
@@ -468,10 +481,15 @@ for i, w in enumerate(ws):
     lons_spl[lons_spl >= np.pi] = lons_spl[lons_spl >= np.pi] - 2 * np.pi
     lon_resort = np.argsort(lons_spl)
     lons_spl = lons_spl[lon_resort]
-    data_in = data_sub[lon_resort, :]
+    data_in = data_sub[lon_resort, :].T
     
     print(i, "lats_spl", lats_spl)
     print(i, "lons_spl", lons_spl)
+
+    print(i, "lon_resort", lon_resort)
+    print(i, "data_sub", data_sub)
+    print(i, "data_in", data_in)
+
     # initialize spline fit object
     spl_out = splinefit(lats_spl, lons_spl, data_in, pole_continuity=True)
 
@@ -485,6 +503,12 @@ for i, w in enumerate(ws):
         #Lats_a_test = Lats_a_test.T
         #Lons_b_test = Lons_b_test.T
         #Lats_b_test = Lats_b_test.T
+        lons_a_test[lons_a_test >= np.pi] = lons_a_test[lons_a_test >= np.pi] - 2 * np.pi
+        lons_b_test[lons_b_test >= np.pi] = lons_b_test[lons_b_test >= np.pi] - 2 * np.pi
+        lons_a_test_resort = np.argsort(lons_a_test)
+        lons_b_test_resort = np.argsort(lons_b_test)
+        lons_a_test = lons_a_test[lons_a_test_resort]
+        lons_b_test = lons_b_test[lons_b_test_resort]
         data_test_a = spl_out(lats_test, lons_a_test)
         data_test_b = spl_out(lats_test, lons_b_test)
         #data_test_a = spl_out(Lats_a_test.ravel(), Lons_a_test.ravel())
@@ -498,6 +522,9 @@ for i, w in enumerate(ws):
         #Lons_test, Lats_test = np.meshgrid(lons_test, lats_test)
         #Lons_test = Lons_test.T
         #Lats_test = Lats_test.T
+        lons_test[lons_test >= np.pi] = lons_test[lons_test >= np.pi] - 2 * np.pi
+        lons_test_resort = np.argsort(lons_test)
+        lons_test = lons_test[lons_test_resort]
         data_test = spl_out(lats_test, lons_test)
         #data_test = spl_out(Lats_test.ravel(), Lons_test.ravel())
     #if bounds['lat_pole_flag']:
@@ -519,8 +546,11 @@ for i, w in enumerate(ws):
     print(i, "data_max from spline", data_max, np.where(data_test == data_max))
     print(i, "is close check", np.where(np.isclose(data_test, data_max)))
 
+    print(i, "data from spline", data_test)
+
     lat_max_idx = np.where(data_test == data_max)[0][0]
     lat_loc = lats_test[lat_max_idx]
+
     if bounds['lon_idxs'] is None:
         if data_max in data_test_a:
             lon_max_idx_a = np.where(data_test_a == data_max)[1][0]
@@ -542,6 +572,10 @@ for i, w in enumerate(ws):
             lat_loc = 0
             r_loc = 0
             lon_loc = None # hopefully we can deal with this correctly in the 2d hist case...  
+
+    if lon_loc < 0 and lon_loc >= -np.pi:
+        lon_loc += 2 * np.pi
+
     vort_maxs.append(data_max)
     th_locs.append(lat_loc)
     r_locs.append(r_loc)
@@ -561,48 +595,6 @@ for i, w in enumerate(ws):
         non_grid_is.append(i)
         non_grid_rlocs.append(r_loc)
         non_grid_rpoi_idxs.append(lat_poi_idx)
-
-
-    lons_spl[lons_spl >= np.pi] = lons_spl[lons_spl >= np.pi] - 2 * np.pi
-    lon_resort = np.argsort(lons_spl)
-    lons_spl = lons_spl[lon_resort]
-    data_in = data_sub[lon_resort, :]
-
-    # possibly temporary, possibly a fix
-    if bounds['lon_idxs'] is None:
-        lons_a_test, lons_b_test = lon_test_ab(bounds['lon_a_bds'], bounds['lon_b_bds'], bounds['lon_a_idxs'], bounds['lon_b_idxs'], precision_phi, bounds['lon_ab_flag'])
-        
-        lons_a_test[lons_a_test >= np.pi] = lons_a_test[lons_a_test >= np.pi] - 2 * np.pi
-        lons_b_test[lons_b_test >= np.pi] = lons_b_test[lons_b_test >= np.pi] - 2 * np.pi
-        lons_a_test_resort = np.argsort(lons_a_test)
-        lons_b_test_resort = np.argsort(lons_b_test)
-        lons_a_test = lons_a_test[lons_a_test_resort]
-        lons_b_test = lons_b_test[lons_b_test_resort]
-
-        data_test_a = spl_out(lats_test, lons_a_test)
-        data_test_b = spl_out(lats_test, lons_b_test)
-        if bounds['lon_ab_flag']:
-            data_test = np.hstack((data_test_b, data_test_a))
-        else:
-            data_test = np.hstack((data_test_a, data_test_b))
-    else:
-        lons_test = lon_test_std(bounds['lon_bds'], bounds['lon_idxs'], precision_phi, bounds['lon_std_flag'])
-
-        lons_test[lons_test >= np.pi] = lons_test[lons_test >= np.pi] - 2 * np.pi
-        lons_test_resort = np.argsort(lons_test)
-        lons_test = lons_test[lons_test_resort]
-
-        data_test = spl_out(lats_test, lons_test)
-
-    data_max = np.max(data_test)
-    print(i, "fix? lats_test", lats_test)
-    if bounds['lon_idxs'] is None:
-        print(i, "fix? lons_a_test", lons_a_test, "lons_b_test", lons_b_test)
-    else:
-        print(i, "fix? lons_test", lons_test)
-    print(i, "fix? data_max from spline", data_max, np.where(data_test == data_max))
-    print(i, "fix? is close check", np.where(np.isclose(data_test, data_max)))
-
 
 print("grid", grid)
 for j in range(len(grid_is)):
