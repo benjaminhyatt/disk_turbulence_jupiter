@@ -281,13 +281,17 @@ def find_max_opt(spl, bounds, prec_r, prec_phi):
     
     spl_func = lambda x: -1 * spl(x[0], x[1], dtheta=0, dphi=0)
     spl_jac = lambda x:  (-1 * spl(x[0], x[1], dtheta=1, dphi=0), np.sin(x[0])**(-1) * -1 * spl(x[0], x[1], dtheta=0, dphi=1)) # ensure x[0] (theta) is not at pole
-
+    
     # loop through local grid points as initial guesses
     lat_guesses_1 = []
     lon_guesses_1 = []
     lat_results_1 = []
     lon_results_1 = []
     data_results_1 = []
+
+    #temporary
+    opt_bds_save = []
+
     lats_guess = lat_test(bounds['lat_sub_mesh_g'], bounds['lat_idxs'], 0, bounds['lat_pole_flag'])
     #lats_guess = lat_test(bounds['lat_sub_mesh_g'], bounds['lat_idxs'], prec_r, bounds['lat_pole_flag'])
     if bounds['lon_idxs'] is None: # search region can be restricted in phi to an area close to the 2pi to 0 transition
@@ -306,6 +310,7 @@ def find_max_opt(spl, bounds, prec_r, prec_phi):
                     opt_bds = ((lats_guess[0], lats_guess[-1]), (lons_b_guess[0], lons_a_guess[-1]))
                 else:
                     opt_bds = ((lats_guess[0], lats_guess[-1]), (lons_a_guess[0], lons_b_guess[-1]))
+                opt_bds_save.append(opt_bds)
                 opt_result = minimize(spl_func, x0, bounds=opt_bds, jac=spl_jac, method='L-BFGS-B', tol=1e-3)
                 lat_guesses_1.append(lat)
                 lon_guesses_1.append(lon)
@@ -318,34 +323,37 @@ def find_max_opt(spl, bounds, prec_r, prec_phi):
                     opt_bds = ((lats_guess[0], lats_guess[-1]), (lons_b_guess[0], lons_a_guess[-1]))
                 else:
                     opt_bds = ((lats_guess[0], lats_guess[-1]), (lons_a_guess[0], lons_b_guess[-1]))
+                opt_bds_save.append(opt_bds)
                 opt_result = minimize(spl_func, x0, bounds=opt_bds, jac=spl_jac, method='L-BFGS-B', tol=1e-3)
                 lat_guesses_1.append(lat)
                 lon_guesses_1.append(lon)
                 lat_results_1.append(opt_result.x[0])
                 lon_results_1.append(opt_result.x[1])
                 data_results_1.append(-1 * spl_func(opt_result.x))
-    else: # search region may contain the pi to -pi transition -- if so, work in original 0 to 2pi coordinates
-        lons_guess = lon_test_std(bounds['lon_bds'], bounds['lon_idxs'], 0, bounds['lon_std_flag'])
+    else:
+        lons_guess = lon_test_std(bounds['lon_bds'], bounds['lon_idxs'], 0, bounds['lon_std_flag']) 
         #lons_guess = lon_test_std(bounds['lon_bds'], bounds['lon_idxs'], prec_phi, bounds['lon_std_flag'])
-        if not(bounds['lon_bds'][0] <= np.pi and bounds['lon_bds'][1] >= np.pi):
-            lons_guess[lons_guess >= np.pi] = lons_guess[lons_guess >= np.pi] - 2 * np.pi
-            lons_guess_resort = np.argsort(lons_guess)
-            lons_guess = lons_guess[lons_guess_resort]
+        lons_guess[lons_guess >= np.pi] = lons_guess[lons_guess >= np.pi] - 2 * np.pi
+        lons_guess_resort = np.argsort(lons_guess)
+        lons_guess = lons_guess[lons_guess_resort]  
+        #if not bounds['lon_std_flag']:
+        #    lons_guess = np.concatenate((lons_guess, [2*np.pi]))
+        #if not(bounds['lon_bds'][0] <= np.pi and bounds['lon_bds'][1] >= np.pi):
+        #    lons_guess[lons_guess >= np.pi] = lons_guess[lons_guess >= np.pi] - 2 * np.pi
+        #    lons_guess_resort = np.argsort(lons_guess)
+        #    lons_guess = lons_guess[lons_guess_resort] 
         for lat in lats_guess:
             for lon in lons_guess:
                 x0 = (lat, lon)
-                if bounds['lon_ab_flag']:
-                    opt_bds = ((lats_guess[0], lats_guess[-1]), (lons_guess[0], lons_guess[-1]))
-                else:
-                    opt_bds = ((lats_guess[0], lats_guess[-1]), (lons_guess[0], lons_guess[-1]))
+                opt_bds = ((lats_guess[0], lats_guess[-1]), (lons_guess[0], lons_guess[-1]))
+                opt_bds_save.append(opt_bds)
                 opt_result = minimize(spl_func, x0, bounds=opt_bds, jac=spl_jac, method='L-BFGS-B', tol=1e-3)
-                #opt_result = minimize(spl_func, x0, bounds=opt_bds)
                 lat_guesses_1.append(lat)
                 lon_guesses_1.append(lon)
                 lat_results_1.append(opt_result.x[0])
                 lon_results_1.append(opt_result.x[1])
                 data_results_1.append(-1 * spl_func(opt_result.x))
-    
+        
     data_max = np.max(data_results_1)
     max_idx = np.where(data_results_1 == data_max)[0][0]
     lat_loc = lat_results_1[max_idx]
@@ -354,12 +362,6 @@ def find_max_opt(spl, bounds, prec_r, prec_phi):
     if lon_loc < 0 and lon_loc >= -np.pi:
         lon_loc += 2 * np.pi
     
-    #print("data_max", data_max)
-    #print("max_idx", max_idx)
-    #print("lat_loc", lat_loc)
-    #print("r_loc", r_loc)
-    #print("lon_loc", lon_loc)
-
     return data_max, lat_loc, r_loc, lon_loc
 
 def find_max_sample(spl, bounds, prec_r, prec_phi):
@@ -412,14 +414,8 @@ def find_max_sample(spl, bounds, prec_r, prec_phi):
             lat_loc = 0
             r_loc = 0
             lon_loc = rand.uniform(0, 2*np.pi) # choice is arbitrary for hist_r, but does affect hist_phi and hist_2d...
-
     if lon_loc < 0 and lon_loc >= -np.pi:
         lon_loc += 2 * np.pi
-
-    #print("data_max", data_max)
-    #print("lat_loc", lat_loc)
-    #print("r_loc", r_loc)
-    #print("lon_loc", lon_loc)
 
     return data_max, lat_loc, r_loc, lon_loc
 
@@ -528,8 +524,6 @@ if use_cutoff and (not r_cutoff_given):
     tend = t[-1] # by default will look closest to the latest times available
     startidx = np.where(t >= tend - tdur)[0][0]
     endidx = -1 #np.where(t >= tend)[0][0]
-    #EN = np.array(f['tasks/EN'])
-    #EN_tavg = np.mean(EN[startidx:endidx])
     EN_tavg = np.mean(f['tasks/EN'][startidx:endidx])
     KE_tavg = ((eps/np.pi) - nu*EN_tavg) / (2*alpha) # analytical estimate, if tracking before sim is converged
     u_rms = np.sqrt(2 * KE_tavg)
@@ -730,7 +724,7 @@ hist_2d_rep /= n_hist
 ### briefly attempting to fit to Rice distribution
 if use_optimize: ### not sure if the fit works well if you give it binned results... we can try that out, but this way seems to work better
     samples = r_locs
-    rice_params = rice.fit(samples)
+    rice_params = rice.fit(samples, floc=0.0)
     b_fit, loc_fit, scale_fit = rice_params
     sig_fit = scale_fit
     nu_fit = b_fit * scale_fit
