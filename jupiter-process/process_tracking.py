@@ -293,10 +293,8 @@ def find_max_opt(spl, bounds, prec_r, prec_phi):
     opt_bds_save = []
 
     lats_guess = lat_test(bounds['lat_sub_mesh_g'], bounds['lat_idxs'], 0, bounds['lat_pole_flag'])
-    #lats_guess = lat_test(bounds['lat_sub_mesh_g'], bounds['lat_idxs'], prec_r, bounds['lat_pole_flag'])
     if bounds['lon_idxs'] is None: # search region can be restricted in phi to an area close to the 2pi to 0 transition
         lons_a_guess, lons_b_guess = lon_test_ab(bounds['lon_a_bds'], bounds['lon_b_bds'], bounds['lon_a_idxs'], bounds['lon_b_idxs'], 0, bounds['lon_ab_flag'])
-        #lons_a_guess, lons_b_guess = lon_test_ab(bounds['lon_a_bds'], bounds['lon_b_bds'], bounds['lon_a_idxs'], bounds['lon_b_idxs'], prec_phi, bounds['lon_ab_flag'])
         lons_a_guess[lons_a_guess >= np.pi] = lons_a_guess[lons_a_guess >= np.pi] - 2 * np.pi
         lons_b_guess[lons_b_guess >= np.pi] = lons_b_guess[lons_b_guess >= np.pi] - 2 * np.pi
         lons_a_guess_resort = np.argsort(lons_a_guess)
@@ -332,16 +330,9 @@ def find_max_opt(spl, bounds, prec_r, prec_phi):
                 data_results_1.append(-1 * spl_func(opt_result.x))
     else:
         lons_guess = lon_test_std(bounds['lon_bds'], bounds['lon_idxs'], 0, bounds['lon_std_flag']) 
-        #lons_guess = lon_test_std(bounds['lon_bds'], bounds['lon_idxs'], prec_phi, bounds['lon_std_flag'])
         lons_guess[lons_guess >= np.pi] = lons_guess[lons_guess >= np.pi] - 2 * np.pi
         lons_guess_resort = np.argsort(lons_guess)
         lons_guess = lons_guess[lons_guess_resort]  
-        #if not bounds['lon_std_flag']:
-        #    lons_guess = np.concatenate((lons_guess, [2*np.pi]))
-        #if not(bounds['lon_bds'][0] <= np.pi and bounds['lon_bds'][1] >= np.pi):
-        #    lons_guess[lons_guess >= np.pi] = lons_guess[lons_guess >= np.pi] - 2 * np.pi
-        #    lons_guess_resort = np.argsort(lons_guess)
-        #    lons_guess = lons_guess[lons_guess_resort] 
         for lat in lats_guess:
             for lon in lons_guess:
                 x0 = (lat, lon)
@@ -520,14 +511,17 @@ tw = t[ws]
 
 # determine Lgamma if needed
 if use_cutoff and (not r_cutoff_given):
-    tdur = 30 #0.2 #30 - a damping time - would be ideal
+    tdur = np.min(((t[-1] - t[0])/3, 1/alpha))
     tend = t[-1] # by default will look closest to the latest times available
     startidx = np.where(t >= tend - tdur)[0][0]
     endidx = -1 #np.where(t >= tend)[0][0]
     EN_tavg = np.mean(f['tasks/EN'][startidx:endidx])
     KE_tavg = ((eps/np.pi) - nu*EN_tavg) / (2*alpha) # analytical estimate, if tracking before sim is converged
     u_rms = np.sqrt(2 * KE_tavg)
-    L_gamma = (u_rms / gamma)**(1/3)
+    if gamma > 0:
+        L_gamma = (u_rms / gamma)**(1/3)
+    else:
+        L_gamma = 0.9
     r_cutoff = 2 * L_gamma #0.6 #2 * L_gamma #0.6 #np.min((2 * L_gamma, 0.6)) # we can come back and modify this choice if we get some better wisdom on this / review jet landscape
 elif use_cutoff and r_cutoff_given:
     r_cutoff = float(args['--r_cutoff'])
@@ -642,11 +636,9 @@ for i, w in enumerate(ws):
 ### time-averaged distribution ###
 if use_interp:
     phi_centers, phi_edges_main, phi_edges_0a, phi_edges_0b, dphis, n_test_per_bin_phi, test_pts_global_phi, test_pts_global_edges_phi_main, test_pts_global_edges_phi_0a, test_pts_global_edges_phi_0b = bins_phi(phi_deal[:, 0], precision_phi, bin_width_phi)
-    #r_centers, r_edges, drs, n_test_per_bin_r, test_pts_global_r, test_pts_global_edges_r = bins_r(r_deal[0, :], precision_r, bin_width_r, r_cutoff_idx)
     r_centers, r_edges, drs, n_test_per_bin_r, test_pts_global_r, test_pts_global_edges_r = bins_r(r_deal[0, :], precision_r, bin_width_r, r_deal.shape[1] - 1)
 else:
     phi_centers, phi_edges_main, phi_edges_0a, phi_edges_0b, dphis, n_test_per_bin_phi, test_pts_global_phi, test_pts_global_edges_phi_main, test_pts_global_edges_phi_0a, test_pts_global_edges_phi_0b = bins_phi(phi_deal[:, 0], 0, bin_width_phi)
-    #r_centers, r_edges, drs, n_test_per_bin_r, test_pts_global_r, test_pts_global_edges_r = bins_r(r_deal[0, :], 0, bin_width_r, r_cutoff_idx)
     r_centers, r_edges, drs, n_test_per_bin_r, test_pts_global_r, test_pts_global_edges_r = bins_r(r_deal[0, :], 0, bin_width_r, r_deal.shape[1] - 1)
 
 n_test_per_bin_2d = np.outer(n_test_per_bin_phi, n_test_per_bin_r)
@@ -672,15 +664,8 @@ phi_centers_2d_fine, r_centers_2d_fine = np.meshgrid(test_pts_global_phi, test_p
 phi_centers_2d_fine = phi_centers_2d_fine.T
 
 hist_r = np.zeros_like(r_centers)
-hist_r_rep = np.zeros_like(r_centers)
 hist_phi = np.zeros_like(phi_centers)
-hist_phi_rep = np.zeros_like(phi_centers)
 hist_2d = np.zeros_like(phi_centers_2d)
-hist_2d_rep = np.zeros_like(phi_centers_2d)
-
-areas_r = np.pi*(r_outer_fine**2 - r_inner_fine**2)
-areas_phi = np.concatenate(((phi_e_main_fine - phi_w_main_fine)/2, [(2*np.pi + phi_e_0a_fine - phi_w_0b_fine)/2]))
-areas_2d = np.outer(areas_phi, areas_r)
 
 n_hist = 0
 ws_hist = np.arange(np.where(t <= t_hist_start)[0][-1], np.where(t >= t_hist_end)[0][0] + 1)
@@ -700,34 +685,32 @@ for j, w_hist in enumerate(ws_hist):
         phi_mask_0 = np.array([phi_mask_0a or phi_mask_0b])
         phi_mask = np.concatenate((phi_mask_main, phi_mask_0))
 
+        # counts by sample point
+        #r_mask_fine = np.logical_and(r_loc_i > r_inner_fine, r_loc_i < r_outer_fine)
+        #phi_mask_main_fine = np.logical_and(phi_loc_i > phi_w_main_fine, phi_loc_i < phi_e_main_fine)
+        #phi_mask_0a_fine = phi_loc_i > phi_w_0a_fine and phi_loc_i < phi_e_0a_fine
+        #phi_mask_0b_fine = phi_loc_i >= phi_w_0b_fine and phi_loc_i < phi_e_0b_fine
+        #phi_mask_0_fine = np.array([phi_mask_0a_fine or phi_mask_0b_fine])
+        #phi_mask_fine = np.concatenate((phi_mask_main_fine, phi_mask_0_fine))
+
+        # sample count
+        n_hist += 1
+
+        # standard histograms
         hist_r[r_mask] += 1
         hist_phi[phi_mask] += 1
         hist_2d[phi_mask, r_mask] += 1
-        n_hist += 1
 
-        # counts by sample point
-        r_mask_fine = np.logical_and(r_loc_i > r_inner_fine, r_loc_i < r_outer_fine)
-        phi_mask_main_fine = np.logical_and(phi_loc_i > phi_w_main_fine, phi_loc_i < phi_e_main_fine)
-        phi_mask_0a_fine = phi_loc_i > phi_w_0a_fine and phi_loc_i < phi_e_0a_fine
-        phi_mask_0b_fine = phi_loc_i >= phi_w_0b_fine and phi_loc_i < phi_e_0b_fine
-        phi_mask_0_fine = np.array([phi_mask_0a_fine or phi_mask_0b_fine])
-        phi_mask_fine = np.concatenate((phi_mask_main_fine, phi_mask_0_fine))
+pdf_r = hist_r / n_hist / drs
+pdf_phi = hist_phi / n_hist / dphis
+r_int = np.pi*(r_outer**2 - r_inner**2)
+phi_int = np.concatenate(((phi_e_main - phi_w_main)/2, [(2*np.pi + phi_e_0a - phi_w_0b)/2]))
+dAs = np.outer(phi_int, r_int)
+pdf_2d = hist_2d / n_hist / dAs
 
-        hist_r_rep[r_mask] += 1 / areas_r[r_mask_fine] / n_test_per_bin_r[r_mask]
-        hist_phi_rep[phi_mask] += 1 / areas_phi[phi_mask_fine] / n_test_per_bin_phi[phi_mask]
-        hist_2d_rep[phi_mask, r_mask] += 1 / areas_2d[phi_mask_fine, r_mask_fine] / n_test_per_bin_2d[phi_mask, r_mask]
-
-hist_r_rep /= n_hist
-hist_phi_rep /= n_hist
-hist_2d_rep /= n_hist
-
-### briefly attempting to fit to Rice distribution
-if use_optimize: ### not sure if the fit works well if you give it binned results... we can try that out, but this way seems to work better
+if use_optimize:
     samples = r_locs
     rice_params = rice.fit(samples, floc=0.0)
-    b_fit, loc_fit, scale_fit = rice_params
-    sig_fit = scale_fit
-    nu_fit = b_fit * scale_fit
 
 ### output ###
 processed = {}
@@ -752,6 +735,7 @@ processed['th_locs'] = th_locs
 processed['r_locs'] = r_locs
 processed['phi_locs'] = phi_locs
 
+processed['n_hist'] = n_hist
 processed['ws_hist'] = ws_hist
 processed['r_centers'] = r_centers
 processed['r_edges'] = r_edges
@@ -763,14 +747,16 @@ processed['phi_edges_0b'] = phi_edges_0b
 processed['dphis'] = dphis
 processed['r_centers_2d'] = r_centers_2d
 processed['phi_centers_2d'] = phi_centers_2d
+
+# standard histograms
 processed['hist_r'] = hist_r
 processed['hist_phi'] = hist_phi
 processed['hist_2d'] = hist_2d
-processed['n_hist'] = n_hist
 
-processed['hist_r_rep'] = hist_r_rep
-processed['hist_phi_rep'] = hist_phi_rep
-processed['hist_2d_rep'] = hist_2d_rep
+# pdfs
+processed['pdf_r'] = pdf_r
+processed['pdf_phi'] = pdf_phi
+processed['pdf_2d'] = pdf_2d
 
 if use_optimize:
     processed['rice_fit'] = rice_params
