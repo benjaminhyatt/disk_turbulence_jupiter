@@ -150,7 +150,7 @@ def set_initial_condition(ke_tot):
     """Initialize a field with random vorticity data of a given norm."""
     psi['c'][m_slice, ell_slice] = draw_gaussian_random_field()
     w_init['c'][m_slice, ell_slice] = draw_gaussian_random_field()
-    ke_init = d3.Average(0.5*psi*w_init).evaluate()['g'][0][0]
+    ke_init = d3.integ(0.5*psi*w_init).evaluate()['g'][0][0]
     # Rescale psi to ke_tot
     psi['c'] *= np.sqrt(ke_tot/ke_init) 
 ke_goal = 0.5*(epsilon/alpha)
