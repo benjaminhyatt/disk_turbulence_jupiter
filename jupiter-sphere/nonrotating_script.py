@@ -128,6 +128,16 @@ scalars.add_task(ave(nu * w * d3.lap(w)), name='Z viscosity')
 CFL = d3.CFL(solver, initial_dt=max_dt, cadence=1, safety=safety, max_change=1.5, min_change=0.5, max_dt=max_dt, threshold=0.05)
 CFL.add_velocity(u)
 
+# Initial condition
+w_init = dist.Field(name='w_init', bases=full_basis)
+def set_initial_condition(ke_tot):
+    """Initialize a field with random vorticity data of a given norm."""
+    psi['c'][m_slice, ell_slice] = draw_gaussian_random_field()
+    w_init['c'][m_slice, ell_slice] = draw_gaussian_random_field()
+    ke_init = d3.Average(0.5*psi*w_init).evaluate()['g'][0][0]
+    # Rescale psi to ke_tot
+    psi['c'] *= np.sqrt(ke_tot/ke_init) 
+
 # Main loop
 try:
     logger.info('Starting loop')
