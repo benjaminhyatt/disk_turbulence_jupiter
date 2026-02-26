@@ -137,6 +137,8 @@ def set_initial_condition(ke_tot):
     ke_init = d3.Average(0.5*psi*w_init).evaluate()['g'][0][0]
     # Rescale psi to ke_tot
     psi['c'] *= np.sqrt(ke_tot/ke_init) 
+ke_goal = 0.5*(epsilon/alpha)
+set_initial_condition(ke_goal)
 
 # Main loop
 try:
