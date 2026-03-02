@@ -1,18 +1,18 @@
 """
-Make frames of profiles
+Make plots of radial profiles
 
 Usage:
     plot_profiles.py <files>... [--output=<dir>]
 
 Options:
-    --output=<dir>  Output directory [default: ./frames] 
+    --output=<dir>      output directory [default: ./frames]
 """
 
 import h5py
 import numpy as np
 import matplotlib
-import matplotlib.pyplot as plt 
-from matplotlib import transforms
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 from dedalus.extras import plot_tools
 
 from mpi4py import MPI
@@ -23,8 +23,9 @@ size = comm.Get_size()
 rank = comm.Get_rank()
 
 def main(filename, start, count, output):
-    
-    dpi = 200
+    """Save plot of specified tasks for given range of analysis writes."""
+
+    dpi = 300
     title_func = lambda sim_time: 't = {:.3f}'.format(sim_time)
     savename_func = lambda write: 'write_{:06}.png'.format(write)
 
@@ -35,11 +36,11 @@ def main(filename, start, count, output):
     plt.rcParams['font.size'] = 11
     plt.rcParams['figure.dpi'] = dpi
 
-    t_mar, b_mar, l_mar, r_mar = (0.2, 0.2, 0.2, 0.1)
+    t_mar, b_mar, l_mar, r_mar = (0.1, 0.2, 0.25, 0.1)
     golden_mean = (np.sqrt(5) - 1.) / 2.
     h_plot, w_plot = (1., 1. / golden_mean)
-    h_pad = b_mar
-    h_total = t_mar + h_plot + h_pad + h_plot + b_mar
+    h_pad = 0.2 * h_plot
+    h_total = t_mar + h_plot + h_pad + h_plot + h_pad + h_plot + b_mar
     w_total = l_mar + w_plot + r_mar
 
     fig_width = 5.5
@@ -47,7 +48,7 @@ def main(filename, start, count, output):
 
     fig = plt.figure(figsize = (scale * w_total, scale * h_total))
 
-    ##### construct axs #####
+    # axs setup #
     left1 = (l_mar) / w_total
     bottom1 = 1 - (t_mar + h_plot) / h_total
     width1 = w_plot / w_total
@@ -58,63 +59,66 @@ def main(filename, start, count, output):
     width2 = w_plot / w_total
     height2 = h_plot / h_total
 
+    left3 = (l_mar) / w_total
+    bottom3 = 1 - (t_mar + h_plot + h_pad + h_plot + h_pad + h_plot) / h_total
+    width3 = w_plot / w_total
+    height3 = h_plot / h_total
+
     # Plot writes
     f = np.load(filename, allow_pickle = True)[()]
-    nframes = f['nout']
-    tasks = f['tasks']
-    subtasks = f['subtasks']
-    labels = f['labels']
-    ymin_u = f['ymin_u']
-    ymax_u = f['ymax_u']
-    ymin_vort = f['ymin_vort']
-    ymax_vort = f['ymax_vort']
+    r = f['r']
+    vortm0 = f['vortm0']
+    vortm0_tavg = f['vortm0_tavg']
+    pvortm0 = f['pvortm0']
+    pvortm0_tavg = f['pvortm0_tavg']
+    drvortm0 = f['drvortm0']
+    drvortm0_tavg = f['drvortm0_tavg']
+    drvortm0 = f['drvortm0']
+    drvortm0_tavg = f['drvortm0_tavg']
+    drpvortm0 = f['drpvortm0']
+    drpvortm0_tavg = f['drpvortm0_tavg']
+    dr2pvortm0 = f['dr2pvortm0']
+    dr2pvortm0_tavg = f['dr2pvortm0_tavg']
 
     progress_cad = np.ceil(count/20)
 
-    colors = ['#d95f02', '#7570b3', '#1b9e77']
-
-    for index in range(start, start+count):
- 
+    for index in range(start, start+count): 
         if index % progress_cad == 0 and rank == 0:
             frac = (index)/count
             percent = '{:.3}'.format(100*frac)
             print("Rank {:}:".format(rank), percent, "% complete")
 
+        # profiles of vorticity and potential vorticity
         ax1 = fig.add_axes([left1, bottom1, width1, height1])
-        
-        task_idx = 0
-        task = tasks[task_idx]
-        for m, subtask in enumerate(subtasks[task]):
-            xdata = f[index][task]['r']
-            ydata = f[index][task]['data_' + subtask].ravel()
-            if 'tavg' in subtask:
-                ax1.plot(xdata, ydata, linewidth = 2.25, linestyle = "dotted", color = colors[int(task_idx + np.floor(m/2))], label = labels[task][m])
-            else:
-                ax1.plot(xdata, ydata, linewidth = 1.5, linestyle = "solid", color = colors[int(task_idx + np.floor(m/2))], label = labels[task][m])
+        ax1.axhline(0., color = 'gray')
+        ax1.plot(r, vortm0_tavg, color = 'black', linewidth = 2.25, label = r'$\omega$ time average')
+        ax1.plot(r, vortm0[index], color = 'blue', linewidth = 1.5, label = r'$\omega$')
+        ax1.plot(r, pvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$q$ time average')
+        ax1.plot(r, pvortm0[index], color = 'orange', linewidth = 1.5, label = r'$q$')
         ax1.set_xlabel(r'$r$')
-        ax1.set_ylim(2.5 * ymin_u, 3 * ymax_u)
-        ax1.vlines(f['r_Lg'], 2.5 * ymin_u, 3 * ymax_u, linestyle = "dashed", linewidth = 1, color = "purple", label = r'$r = L_{\gamma}$')
-        ax1.legend(loc = "lower left", fontsize = 8)
+        ax1.legend(loc = 'lower left')
 
-
+        # profiles of their first radial derivatives
         ax2 = fig.add_axes([left2, bottom2, width2, height2])
-        task_idx = 1
-        task = tasks[task_idx]
-        for m, subtask in enumerate(subtasks[task]):
-            xdata = f[index][task]['r']
-            ydata = f[index][task]['data_' + subtask].ravel()
-            if 'tavg' in subtask:
-                ax2.plot(xdata, ydata, linewidth = 2.25, linestyle = "dotted", color = colors[int(task_idx + np.floor(m/2))], label = labels[task][m])
-            else:
-                ax2.plot(xdata, ydata, linewidth = 1.5, linestyle = "solid", color = colors[int(task_idx + np.floor(m/2))], label = labels[task][m])
+        ax2.axhline(0., color = 'gray')
+        ax2.plot(r, drvortm0_tavg, color = 'black', linewidth = 2.25, label = r'$\partial_r \omega$ time average')
+        ax2.plot(r, drvortm0[index], color = 'blue', linewidth = 1.5, label = r'$\partial_r \omega$')
+        ax2.plot(r, drpvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$\partial_r q$ time average')
+        ax2.plot(r, drpvortm0[index], color = 'orange', linewidth = 1.5, label = r'$\partial_r q$')
         ax2.set_xlabel(r'$r$')
-        ax2.set_ylim(1.3 * ymin_vort, 4 * ymax_vort)
-        ax2.vlines(f['r_Lg'], 1.3 * ymin_vort, 4 * ymax_vort, linestyle = "dashed", linewidth = 1, color = "purple", label = r'$r = L_{\gamma}$')
-        ax2.legend(loc = "lower left", fontsize = 8)
+        ax2.legend(loc = 'lower left')
+
+        # profiles of the second radial derivative of pv
+        ax3 = fig.add_axes([left3, bottom3, width3, height3])
+        ax3.axhline(0., color = 'gray')
+        ax3.plot(r, dr2pvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$\partial_r^2 q$ time average')
+        ax3.plot(r, dr2pvortm0[index], color = 'orange', linewidth = 1.5, label = r'$\partial_r^2 q$')
+        ax3.set_xlabel(r'$r$')
+        ax3.legend(loc = 'lower left')
 
         # Add time title
-        title = title_func(f[index][task]['t'])
-        title_height = 1 - 0.25 * t_mar
+        title = title_func(f['tw'][index])
+        title_height = 1 - 0.125 * t_mar
         fig.suptitle(title, x=0.44, y=title_height, ha='left')
         # Save figure
         savename = savename_func(index)
@@ -124,23 +128,58 @@ def main(filename, start, count, output):
 
     plt.close(fig)
 
+    # Make a plot of just time-averaged profiles 
+    if rank == 0:
+        fig = plt.figure(figsize = (scale * w_total, scale * h_total))
+        # profiles of vorticity and potential vorticity
+        ax1 = fig.add_axes([left1, bottom1, width1, height1])
+        ax1.plot(r, vortm0_tavg, color = 'black', linewidth = 2.25, label = r'$\omega$ time average')
+        ax1.plot(r, pvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$q$ time average')
+        ax1.set_xlabel(r'$r$')
+        ax1.legend(loc = 'lower left')
+
+        # profiles of their first radial derivatives
+        ax2 = fig.add_axes([left2, bottom2, width2, height2])
+        ax2.plot(r, drvortm0_tavg, color = 'black', linewidth = 2.25, label = r'$\partial_r \omega$ time average')
+        ax2.plot(r, drpvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$\partial_r q$ time average')
+        ax2.set_xlabel(r'$r$')
+        ax2.legend(loc = 'lower left')
+
+        # profiles of the second radial derivative of pv
+        ax3 = fig.add_axes([left3, bottom3, width3, height3])
+        ax3.plot(r, dr2pvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$\partial_r^2 q$ time average')
+        ax3.set_xlabel(r'$r$')
+        ax3.legend(loc = 'lower left')
+
+        # Save figure
+        savepath = 'profiles_tavg_' + args['--output'] + '.png'
+        fig.savefig(str(savepath), dpi=dpi)
+        fig.clear()
+
+    plt.close(fig)
+
+
+
 if __name__ == "__main__":
 
     import pathlib
     from docopt import docopt
     from dedalus.tools import logging
-    import post_npy
+    from dedalus.tools import post
     from dedalus.tools.parallel import Sync
 
-    args = docopt(__doc__)
-    if args['--output'] is not None:
-        output_path = pathlib.Path(args['--output']).absolute()
-    else:
-        output_path = './frames'
+    import post_npy    
 
+    args = docopt(__doc__)
+
+    from dedalus.tools.logging import *
+    logger = logging.getLogger(__name__)
+
+    output_path = pathlib.Path(args['--output']).absolute()
     # Create output directory if needed
     with Sync() as sync:
         if sync.comm.rank == 0:
             if not output_path.exists():
                 output_path.mkdir()
+
     post_npy.visit_writes(args['<files>'], main, output=output_path)

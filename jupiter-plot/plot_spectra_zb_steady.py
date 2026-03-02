@@ -1,11 +1,9 @@
 """
-Make frames of azimuthally-integrated spectra at steady-state
-
 Usage:
-    plot_spectra_zb_steady.py <files>... [--output=<dir>]
+    plot_spectra_zb_steady.py <file>... [options]
 
-Options:
-    --output=<dir>  Output directory [default: ./frames] 
+Options:    
+    --dini=<bool>               True: uses a Dini expansion (Bessel with H=1 Robin bc); False: uses a Bessel expansion (Dirichlet bc) [default: True]
 """
 
 import h5py
@@ -22,26 +20,42 @@ comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
 
-Nphi, Nr = 512, 256
-nu = 2e-4
-gamma = 0#1920 #0 #85 #0 #1920 #0 
-k_force = 20
-eps = 1 
-alpha = 1e-2
-ring = 0 
-restart_evolved = False #False #True
+from docopt import docopt
+args = docopt(__doc__)
 
-output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.1e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr)
-output_suffix += '_eps_{:.1e}'.format(eps)
-output_suffix += '_alpha_{:.1e}'.format(alpha)
-output_suffix += '_ring_{:d}'.format(ring)
-output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
-output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
+def str_to_float(a):
+    first = float(a[0])
+    try:
+        sec = float(a[2]) # if str begins with format XdY
+    except:
+        sec = 0 
+    if a[-3] == 'p':
+        sgn = 1 
+    else:
+        sgn = -1
+    exp = int(a[-2:])
+    return (first + sec/10) * 10**(sgn * exp)
 
-filename = '../jupiter-process/processed_spectra_zb_dini_' + output_suffix + '.npy'
+print("args read in")
+print(args)
+
+file_str = args['<file>'][0]
+dini = eval(args['--dini'])
+if dini:
+    output_prefix = 'processed_spectra_zb_dini'
+else:
+    output_prefix = 'processed_spectra_zb_std'
+output_suffix = file_str.split(output_prefix + '_')[1].split('.')[0].split('/')[0] #[:-1] 
+
+Nr = int(output_suffix.split('Nr_')[1].split('_')[0])
+
+alpha_str = output_suffix.split('alpha_')[1].split('_')[0]
+alpha_read = str_to_float(alpha_str)
+alpha_vals = np.array((1e-2, 3.3e-2, 1e-1))
+alpha = alpha_vals[np.argmin(np.abs(alpha_vals - alpha_read))]
 
 trunc_data = True
-trunc_scale = 128 #sig/2pi approx Nr/2
+trunc_scale = Nr/np.pi
 
 dpi = 200
 
@@ -53,6 +67,7 @@ plt.rcParams['font.size'] = 17
 plt.rcParams['figure.dpi'] = dpi
 
 t_mar, b_mar, l_mar, r_mar = (0.1, 0.20, 0.20, 0.05)
+#t_mar, b_mar, l_mar, r_mar = (0.1, 0.15, 0.2, 0.05)
 #golden_mean = (np.sqrt(5) - 1.) / 2.
 #h_plot, w_plot = (1., 1. / golden_mean)
 h_plot, w_plot = (1., 1.)
@@ -72,7 +87,7 @@ width1 = w_plot / w_total
 height1 = h_plot / h_total
 
 # Plot writes
-f = np.load(filename, allow_pickle = True)[()]
+f = np.load(file_str, allow_pickle = True)[()]
 nframes = len(f['ws'])
 
 tasks = ['keBn_zonal', 'keBn_nz', 'keBn']
@@ -81,23 +96,65 @@ tasks = ['keBn_zonal', 'keBn_nz', 'keBn']
 labels = {}
 labels['keBn'] = r'$K_{\rm tot}$'
 labels['enBn'] = r'$Z_{\rm tot}$'
+labels['fluxBn'] = r'$\Pi_{\rm tot}$'
 labels['keBn_zonal'] = r'$K_{m = 0}$'
 labels['enBn_zonal'] = r'$Z_{m = 0}$'
+labels['fluxBn_zonal'] = r'$\Pi_{m = 0}$'
 labels['keBn_nz'] = r'$K_{m \ne 0}$'
 labels['enBn_nz'] = r'$Z_{m \ne 0}$'
+labels['fluxBn_nz'] = r'$\Pi_{m \ne 0}$'
 
-grey_out = False #True
-if grey_out:
-    colors = ['grey', 'grey', 'grey']
-else:
-    colors = ['#7570b3', '#1b9e77', '#d95f02']
+colors = ['#7570b3', '#1b9e77', '#d95f02']
 
-#ymin = 10**(np.floor(np.log10(np.min(f[tasks[-1]][1:,:]))) + 1)
-#ymax = 10**(np.ceil(np.log10(np.max(f[tasks[-1]][1:,:]))))
-#ymin = 1e-9
-#ymax = 1e1
 ymin = 5e-12
 ymax = 5e1
+
+
+ax1 = fig.add_axes([left1, bottom1, width1, height1])
+ax1.set_yscale('log')
+ax1.set_xscale('log')
+
+xdata = f['centers'] / (2 * np.pi)
+print("bin centers normalized by 1/2pi", xdata)
+
+for p, task in enumerate(tasks):
+    ydata = f[task + '_tavg'][:]
+    ydata_tavg = np.copy(ydata[np.abs(ydata) > 1e-14])
+    xdata_tavg = np.copy(xdata[np.abs(ydata) > 1e-14])
+    if trunc_data:
+        ydata_tavg = np.copy(ydata_tavg[xdata_tavg <= trunc_scale])
+        xdata_tavg = np.copy(xdata_tavg[xdata_tavg <= trunc_scale])
+    if task != 'keBn':
+        ax1.plot(xdata_tavg, ydata_tavg, linestyle = 'solid', linewidth = 4.5, label = labels[task], color = colors[p])
+    else:
+        ax1.plot(xdata_tavg, ydata_tavg, linestyle = 'dotted', linewidth = 4.5, label = labels[task], color = colors[p])
+
+Cth = 6.0
+print(np.sum(f['keB_tavg']))
+KE_tavg = np.sum(f['keB_tavg']) / np.pi
+print(KE_tavg)
+eps_value = 2 * alpha * KE_tavg * np.pi
+print(eps_value)
+ax1.plot(xdata_tavg, Cth*(eps_value)**(2/3)*(xdata_tavg*2*np.pi)**(-5/3), color = "black", ls = "dashed")
+
+ax1.set_xlabel(r'$k / 2\pi$')
+ax1.set_ylim(ymin, ymax)
+
+ax1.legend(loc = "lower left")
+if dini:
+    fig.savefig('ke_spectra_zb_dini_steady_' + output_suffix + '.png', dpi=dpi)
+    print('saving figure: ke_spectra_zb_dini_steady_' + output_suffix + '.png')
+else:
+    fig.savefig('ke_spectra_zb_std_steady_' + output_suffix + '.png', dpi=dpi)
+    print('saving figure: ke_spectra_zb_std_steady_' + output_suffix + '.png')
+fig.clear()
+
+
+#######
+tasks = ['enBn_zonal', 'enBn_nz', 'enBn']
+
+ymin = 5e-8
+ymax = 5e5
 
 ax1 = fig.add_axes([left1, bottom1, width1, height1])
 ax1.set_yscale('log')
@@ -112,29 +169,59 @@ for p, task in enumerate(tasks):
     if trunc_data:
         ydata_tavg = np.copy(ydata_tavg[xdata_tavg <= trunc_scale])
         xdata_tavg = np.copy(xdata_tavg[xdata_tavg <= trunc_scale])
-    if task != 'keBn':
+    if task != 'enBn':
         ax1.plot(xdata_tavg, ydata_tavg, linestyle = 'solid', linewidth = 4.5, label = labels[task], color = colors[p])
     else:
         ax1.plot(xdata_tavg, ydata_tavg, linestyle = 'dotted', linewidth = 4.5, label = labels[task], color = colors[p])
-#if plot_tavg:
-#    ydata = f[task_tavg][:]
-#    ax1.plot(xdata, ydata, markersize = 2.5, linestyle = "dashed", dashes = (5, 6), color = "black")
-
-ax1.set_xlabel(r'$\sigma / 2\pi$')
-#ax1.set_ylabel(labels[task])
+ax1.set_xlabel(r'$k / 2\pi$')
 ax1.set_ylim(ymin, ymax)
 
-if not grey_out:
-    ax1.legend(loc = "lower left")
+ax1.legend(loc = "lower left")
 
-
-# Add time title
-#title = 'Kinetic energy'
-#title_height = 1 - 0.25 * t_mar
-#fig.suptitle(title, x=0.44, y=title_height, ha='left')
-# Save figure
-if grey_out:
-    fig.savefig('spectra_zb_dini_steady_grey_out_' + output_suffix + '.png', dpi=dpi)
+if dini:
+    fig.savefig('en_spectra_zb_dini_steady_' + output_suffix + '.png', dpi=dpi)
+    print('saving figure: en_spectra_zb_dini_steady_' + output_suffix + '.png')
 else:
-    fig.savefig('spectra_zb_dini_steady_' + output_suffix + '.png', dpi=dpi)
+    fig.savefig('en_spectra_zb_std_steady_' + output_suffix + '.png', dpi=dpi)
+    print('saving figure: en_spectra_zb_std_steady_' + output_suffix + '.png')
 fig.clear()
+
+
+#######
+tasks = ['fluxBn_zonal', 'fluxBn_nz', 'fluxBn']
+
+ymin = 5e-8
+ymax = 5e5
+
+ax1 = fig.add_axes([left1, bottom1, width1, height1])
+ax1.set_yscale('log')
+ax1.set_xscale('log')
+
+xdata = f['centers'] / (2 * np.pi)
+
+for p, task in enumerate(tasks):
+    ydata = f[task + '_tavg'][:]
+    ydata_tavg = np.copy(ydata[np.abs(ydata) > 1e-14])
+    xdata_tavg = np.copy(xdata[np.abs(ydata) > 1e-14])
+    if trunc_data:
+        ydata_tavg = np.copy(ydata_tavg[xdata_tavg <= trunc_scale])
+        xdata_tavg = np.copy(xdata_tavg[xdata_tavg <= trunc_scale])
+    if task != 'fluxBn':
+        ax1.plot(xdata_tavg, ydata_tavg, linestyle = 'solid', linewidth = 4.5, label = labels[task], color = colors[p])
+    else:
+        ax1.plot(xdata_tavg, ydata_tavg, linestyle = 'dotted', linewidth = 4.5, label = labels[task], color = colors[p])
+ax1.set_xlabel(r'$k / 2\pi$')
+ax1.set_ylim(ymin, ymax)
+
+ax1.legend(loc = "lower left")
+
+ax1.plot(xdata_tavg, (eps_value)*np.ones(xdata_tavg.shape[0]), color = "black", ls = "dashed")
+
+if dini:
+    fig.savefig('flux_spectra_zb_dini_steady_' + output_suffix + '.png', dpi=dpi)
+    print('saving figure: flux_spectra_zb_dini_steady_' + output_suffix + '.png')
+else:
+    fig.savefig('flux_spectra_zb_std_steady_' + output_suffix + '.png', dpi=dpi)
+    print('saving figure: flux_spectra_zb_std_steady_' + output_suffix + '.png')
+fig.clear()
+

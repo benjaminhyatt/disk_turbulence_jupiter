@@ -43,6 +43,7 @@ if len(files[0]) == 1:
     files = [files]
     print("only read-in one file name argument - not recommended to use this script in that case")
 files = sorted(files, key=get_int)
+#files[0], files[1] = files[1], files[0]
 print('')
 print('sorted files:')
 for file_str in files:
@@ -56,6 +57,7 @@ Nr = int(output_suffix.split('Nr_')[1].split('_')[0])
 writes_read = {}
 times_read = {}
 tasks_read = {}
+
 for i, fi_str in enumerate(files):
     with h5py.File(fi_str, 'r') as fi:
         # writes
@@ -112,7 +114,7 @@ for i, fi_str in enumerate(files):
                     tasks_read[i][task]['kind'] = 'snapshot_scalar'
             elif space_dim == 3:
                 tasks_read[i][task]['kind'] = 'snapshot_field'
-
+            
 # merging decisions
 print("merging decisions")
 writes_merge = 0
@@ -134,6 +136,20 @@ for i in range(nfiles):
         ends_merge[i] = ends_merge[i - 1] + 1 + ends_indiv[i]
     writes_merge += ends_merge[i] + 1 - starts_merge[i]
 
+# if a task was excluded from any one of the runs, do not attempt to include in merge
+tasks_excluded = []
+for i in range(nfiles):    
+    for j in range(nfiles):
+        if j != i: 
+            for k, task in enumerate(list(tasks_read[i].keys())):
+                if task not in list(tasks_read[j].keys()):
+                    print(task, "missing a match in at least one other file")
+                    tasks_excluded.append(task)
+for i in range(nfiles):
+    for exclude in tasks_excluded:
+        if exclude in list(tasks_read[i].keys()):
+            print("will not merge", exclude, "from file", i)
+            del tasks_read[i][exclude]
 
 # perform merging
 print('saving merged files as ' + output_prefix + '_' + output_suffix + '.h5')
@@ -144,36 +160,36 @@ with h5py.File(output_prefix + '_' + output_suffix + '.h5', 'w') as f_merge:
     
     # link tasks virtually
     for k, task in enumerate(list(tasks_read[0].keys())):
-        if tasks_read[0][task]['kind'] == 'scalar' and scalars:
-            merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 1, 1), dtype=dtype)
-            for i in range(nfiles):
-                merge_layout[starts_merge[i]:ends_merge[i] + 1, 0, 0] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 1, 1)) 
-        elif tasks_read[0][task]['kind'] == 'profiler' and profiles:
-            merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 1, Nr), dtype=dtype)
-            for i in range(nfiles):
-                merge_layout[starts_merge[i]:ends_merge[i] + 1, 0, :] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 1, Nr))
-        elif tasks_read[0][task]['kind'] == 'profilephi' and profiles:
-            merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, Nphi, 1), dtype=dtype)
-            for i in range(nfiles):
-                merge_layout[starts_merge[i]:ends_merge[i] + 1, :, 0] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, Nphi, 1))
-        elif tasks_read[0][task]['kind'] == 'profiler_field' and profiles:
-            merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 2, 1, Nr), dtype=dtype)
-            for i in range(nfiles):
-                merge_layout[starts_merge[i]:ends_merge[i] + 1, :, 0, :] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 2, 1, Nr))
-        elif tasks_read[0][task]['kind'] == 'profilephi_field' and profiles:
-            merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 2, Nphi, 1), dtype=dtype)
-            for i in range(nfiles):
-                merge_layout[starts_merge[i]:ends_merge[i] + 1, :, :, 0] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 2, Nphi, 1))  
-        elif tasks_read[0][task]['kind'] == 'snapshot_field' and snapshots:
-            merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 2, Nphi, Nr), dtype=dtype)
-            for i in range(nfiles):
-                merge_layout[starts_merge[i]:ends_merge[i] + 1, :, :, :] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 2, Nphi, Nr)) 
-        elif tasks_read[0][task]['kind'] == 'snapshot_scalar' and snapshots:
-            merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, Nphi, Nr), dtype=dtype)
-            for i in range(nfiles):
-                merge_layout[starts_merge[i]:ends_merge[i] + 1, :, :] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, Nphi, Nr))
-        f_merge.create_virtual_dataset('tasks/' + task, merge_layout)
-    
+            if tasks_read[0][task]['kind'] == 'scalar' and scalars:
+                merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 1, 1), dtype=dtype)
+                for i in range(nfiles):
+                    merge_layout[starts_merge[i]:ends_merge[i] + 1, 0, 0] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 1, 1)) 
+            elif tasks_read[0][task]['kind'] == 'profiler' and profiles:
+                merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 1, Nr), dtype=dtype)
+                for i in range(nfiles):
+                    merge_layout[starts_merge[i]:ends_merge[i] + 1, 0, :] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 1, Nr))
+            elif tasks_read[0][task]['kind'] == 'profilephi' and profiles:
+                merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, Nphi, 1), dtype=dtype)
+                for i in range(nfiles):
+                    merge_layout[starts_merge[i]:ends_merge[i] + 1, :, 0] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, Nphi, 1))
+            elif tasks_read[0][task]['kind'] == 'profiler_field' and profiles:
+                merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 2, 1, Nr), dtype=dtype)
+                for i in range(nfiles):
+                    merge_layout[starts_merge[i]:ends_merge[i] + 1, :, 0, :] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 2, 1, Nr))
+            elif tasks_read[0][task]['kind'] == 'profilephi_field' and profiles:
+                merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 2, Nphi, 1), dtype=dtype)
+                for i in range(nfiles):
+                    merge_layout[starts_merge[i]:ends_merge[i] + 1, :, :, 0] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 2, Nphi, 1))  
+            elif tasks_read[0][task]['kind'] == 'snapshot_field' and snapshots:
+                merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, 2, Nphi, Nr), dtype=dtype)
+                for i in range(nfiles):
+                    merge_layout[starts_merge[i]:ends_merge[i] + 1, :, :, :] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, 2, Nphi, Nr)) 
+            elif tasks_read[0][task]['kind'] == 'snapshot_scalar' and snapshots:
+                merge_layout = VirtualLayout(shape=(ends_merge[nfiles - 1] + 1, Nphi, Nr), dtype=dtype)
+                for i in range(nfiles):
+                    merge_layout[starts_merge[i]:ends_merge[i] + 1, :, :] = VirtualSource(files[i], 'tasks/' + task, shape = (ends_indiv[i] + 1, Nphi, Nr))
+            f_merge.create_virtual_dataset('tasks/' + task, merge_layout)
+        
     # hard copy scales (if label is 't' copy from each file, otherwise just once)
     for i, fi_str in enumerate(files):
         with h5py.File(fi_str, 'r') as fi:
