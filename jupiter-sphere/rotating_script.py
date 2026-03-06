@@ -8,6 +8,7 @@ import h5py
 
 from mpi4py import MPI
 rank = MPI.COMM_WORLD.rank
+size = MPI.COMM_WORLD.Get_size()
 
 # Domain parameters
 N = 2048 # og 256
@@ -141,7 +142,7 @@ scalars.add_task(ave(nu * u @ d3.lap(u)), name='E viscosity')
 scalars.add_task(ave(nu * w * d3.lap(w)), name='Z viscosity')
 
 # CFL
-CFL = d3.CFL(solver, initial_dt=initial_timestep, cadence=1, safety=safety, max_change=1.5, min_change=0.5, max_dt=max_dt, threshold=0.05)
+CFL = d3.CFL(solver, initial_dt=0.1*max_dt, cadence=1, safety=safety, max_change=1.5, min_change=0.5, max_dt=max_dt, threshold=0.05)
 CFL.add_velocity(u)
 
 # Initial condition
@@ -150,9 +151,14 @@ def set_initial_condition(ke_tot):
     """Initialize a field with random vorticity data of a given norm."""
     psi['c'][m_slice, ell_slice] = draw_gaussian_random_field()
     w_init['c'][m_slice, ell_slice] = draw_gaussian_random_field()
-    ke_init = d3.integ(0.5*psi*w_init).evaluate()['g'][0][0]
+    ke_init = ave(-0.5*psi*w_init).evaluate()
+    if rank == 0:
+        data = [4 * np.pi * ke_init['g'][0][0]]*size
+    else:
+        data = None
+    ke_init_int = MPI.COMM_WORLD.scatter(data, root=0)
     # Rescale psi to ke_tot
-    psi['c'] *= np.sqrt(ke_tot/ke_init) 
+    psi['c'] *= np.sqrt(ke_tot/ke_init_int)  
 ke_goal = 0.5*(epsilon/alpha)
 set_initial_condition(ke_goal)
 
