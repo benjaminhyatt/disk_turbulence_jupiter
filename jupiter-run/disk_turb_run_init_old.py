@@ -1,8 +1,8 @@
 """
-Run simulations of disk turbulence in the gamma plane approximation
+Run simulations of disk turbulence in the gamma plane approximation 
 
 Usage:
-    disk_turb_run_inputs.py [options]
+    disk_turb_run_init.py [options]
 
 Options:    
     --seed=<int>                random seed for stochastic forcing [default: 31415926]
@@ -18,32 +18,29 @@ Options:
     --Nr=<int>                  radial resolution [default: 256]
 
     --ring=<bool>               turns off forcing as r approaches the boundary [default: False]
-    --width=<float>             sets width of the transition region in forcing as r approaches the boundary [default: 0.08] (only used if ring True)
+    --width=<float>             sets width of the transition region in forcing as r approaches the boundary [default: 0.04] (only used if ring True)
 
     --restart=<bool>            flag that this run starts from a previous checkpoint (with same parameters) [default: False]
     --restart_dir=<path>        path of checkpoint to restart from [default: None]
     --restart_hyst=<bool>       flag that this run starts from a previous checkpoint, from a different gamma [default: False]
-    --hystn=<int>               experiment number [default: None]
+    --hystn=<int>               experiment number [default: 1]
 
     --tau_mod=<bool>            flag False to use default lift operator, True to use suggested modification [default: True]
+    --ring_init=<bool>          turns off energy in initial condition as r approaches the boundary [default: True]
 
     --restart_eps_0=<bool>      flag that this run starts from a previous checkpoint, but turning the forcing off [default: False]
-    --restart_evolved=<bool>    indicate in output names that this run starts from a checkpoint from a different run [default: False]
+    --restart_evolved=<bool>    indicate in output names that this run starts from a checkpoint from a run with different parameters [default: False]
 
     --safety=<float>            CFL safety factor [default: 0.1]
     --timestepper=<string>      Choice of timestepper [default: SBDF2]
 
-    --bc=<string>               Specification of boundary conditions ('sf' or 'ns') [default: sf]
+    --ncc_cutoff=<float>        value of ncc_cutoff [default: 1e-6]
+    --implicit=<bool>           flag True to treat Coriolis term implicitly [default: False]
 """
 
 import numpy as np
 import dedalus.public as d3
 import matplotlib.pyplot as plt
-
-from dedalus.tools.config import config
-
-#config['analysis']['FILEHANDLER_PARALLEL_DEFAULT'] = 'gather'
-print(config['analysis']['FILEHANDLER_PARALLEL_DEFAULT'])
 
 from mpi4py import MPI
 rank = MPI.COMM_WORLD.rank
@@ -59,11 +56,11 @@ dtype = np.float64
 from docopt import docopt
 args = docopt(__doc__)
 
-from fractions import Fraction
-
 logger.info("args read in")
 if rank == 0:
     print(args)
+
+from fractions import Fraction
 
 seed_in = int(args['--seed'])
 flip = eval(args['--flip'])
@@ -86,18 +83,18 @@ restart = eval(args['--restart'])
 restart_evolved = eval(args['--restart_evolved'])
 restart_eps_0 = eval(args['--restart_eps_0'])
 restart_hyst = eval(args['--restart_hyst'])
-if restart_hyst:
-    hystn= int(args['--hystn'])
-
+hystn= int(args['--hystn'])
 if restart or restart_evolved or restart_eps_0 or restart_hyst:
     restart_dir = args['--restart_dir']
 
 tau_mod = eval(args['--tau_mod'])
+ring_init = eval(args['--ring_init'])
 
 safety = float(args['--safety'])
 timestepper_str = args['--timestepper']
 
-bc_str = args['--bc']
+ncc_cutoff = float(args['--ncc_cutoff'])
+implicit = eval(args['--implicit'])
 
 output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.1e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) 
 output_suffix += '_eps_{:.1e}'.format(eps)
@@ -105,10 +102,14 @@ output_suffix += '_alpha_{:.1e}'.format(alpha)
 output_suffix += '_ring_{:d}'.format(ring)
 output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
 output_suffix += '_tau_mod_{:d}'.format(tau_mod)
+output_suffix += '_ring_init_{:d}'.format(ring_init)
 output_suffix += '_seed_{:d}'.format(seed_in)
 output_suffix += '_safety_{:.1e}'.format(safety)
 output_suffix += '_timestepper_' + timestepper_str
-output_suffix += '_bc_' + bc_str
+output_suffix += '_ncc_cutoff{:.1e}'.format(ncc_cutoff)
+output_suffix += '_implicit_{:d}'.format(implicit)
+if flip:
+    output_suffix += '_flip_{:d}'.format(flip)
 output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
 
 # Bases
@@ -226,55 +227,59 @@ F= d3.GeneralFunction(dist, u.domain, u.tensorsig, dtype, 'g', forcing_func)
 #angF= rvec@d3.skew(F)
 #Fvort= d3.div(d3.skew(F))
 
-G = dist.Field(bases=disk)
-G.preset_scales(dealias)
-G['g']= - 0.5*gamma*pow(r_deal,2) * pow(phi_deal,0) #Coriolis parameter
-G=d3.Grid(G)
+if not implicit:
+    G = dist.Field(bases=disk)
+    G.preset_scales(dealias)
+    G['g']= - 0.5*gamma*pow(r_deal,2) * pow(phi_deal,0) #Coriolis parameter
+    G=d3.Grid(G)
+else:
+    G = dist.Field(bases=radial_basis)
+    G.preset_scales(dealias)
+    G['g']= - 0.5*gamma*pow(r_deal,2)
 
 pvort = vort + G
 
 # Problem
 problem = d3.IVP([p, u, tau_u, tau_p], namespace=locals())
 problem.add_equation("div(u) + tau_p = 0")
-if tau_mod:
-    if restart_eps_0:
-        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) - alpha*u - G*d3.skew(u)")
+if not implicit:
+    if tau_mod:
+        if restart_eps_0:
+            problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) - alpha*u - G*d3.skew(u)")
+        else:
+            problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
     else:
-        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
+        if restart_eps_0:
+            problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) = - u@grad(u) - alpha*u - G*d3.skew(u)")
+        else:
+            problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
 else:
-    if restart_eps_0:
-        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) = - u@grad(u) - alpha*u - G*d3.skew(u)")
+    if tau_mod:
+        if restart_eps_0:
+            problem.add_equation("dt(u) - nu*lap(u) + grad(p) + alpha*u + G*d3.skew(u) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u)")
+        else:
+            problem.add_equation("dt(u) - nu*lap(u) + grad(p) + alpha*u + G*d3.skew(u) + lift(tau_u) + sig*lift_2(tau_u) = - u@grad(u) + amp*F")
     else:
-        problem.add_equation("dt(u) - nu*lap(u) + grad(p) + lift(tau_u) = - u@grad(u) + amp*F - alpha*u - G*d3.skew(u)")
-# nphi!=0
+        if restart_eps_0:
+            problem.add_equation("dt(u) - nu*lap(u) + grad(p) + alpha*u + G*d3.skew(u) + lift(tau_u) = - u@grad(u)")
+        else:
+            problem.add_equation("dt(u) - nu*lap(u) + grad(p) + alpha*u + G*d3.skew(u) + lift(tau_u) = - u@grad(u) + amp*F")
 problem.add_equation("radial(u(r=1)) = 0", condition='nphi!=0')
-if bc_str == 'sf':
-    problem.add_equation("azimuthal(radial(stress(r=1))) = 0", condition='nphi!=0')
-elif bc_str == 'ns':
-    problem.add_equation("azimuthal(u(r=1)) = 0", condition='nphi!=0')
-else:
-    logger.info('invalid specification of bc - not implemented')
-# nphi==0
+problem.add_equation("azimuthal(radial(stress(r=1))) = 0", condition='nphi!=0')
 problem.add_equation("radial(u(r=1)) = 0", condition='nphi==0')
 try:
     problem.equations[-1]['valid_modes'][1] = True
 except:
     logger.info("Skipping valid modes line on rank %d" %(rank))
-if bc_str == 'sf':
-    problem.add_equation("azimuthal(radial(stress(r=1))) = 0", condition='nphi==0')
-elif bc_str == 'ns':
-    problem.add_equation("azimuthal(u(r=1)) = 0", condition='nphi==0')
-else:
-    logger.info('invalid specification of bc - not implemented')
+problem.add_equation("azimuthal(radial(stress(r=1))) = 0", condition='nphi==0')
 try:
     problem.equations[-1]['valid_modes'][1] = True
 except:
     logger.info("Skipping valid modes line on rank %d" %(rank))
-# gauge choice
 problem.add_equation("integ(p) = 0")
 
 # timestepping
-stop_time = 8/alpha
+stop_time = 4 #2.5 #8/alpha
 if timestepper_str.upper() == 'SBDF2':
     timestepper = d3.SBDF2
 elif timestepper_str.upper() == 'RK443':
@@ -283,100 +288,45 @@ elif timestepper_str.upper() == 'RK222':
     timestepper = d3.RK222
 tstep = 1e-5
 
+
 # Solver
 logger.info('building solver')
-solver = problem.build_solver(timestepper)
+solver = problem.build_solver(timestepper, ncc_cutoff=ncc_cutoff)
 solver.stop_sim_time = stop_time
 logger.info('solver built')
 
 # restart from checkpoint
 if restart or restart_evolved or restart_eps_0 or restart_hyst:
     write, initial_timestep = solver.load_state(restart_dir)
-    tstep = initial_timestep
     if restart:
         file_handler_mode = 'append'
     else:
         file_handler_mode = 'overwrite'
-    # advance random state forward:
-    if timestepper_str == 'SBDF2':
-        for old_iter in range(int(2*solver.iteration)):
-            phases = rand.uniform(0,2*np.pi,k_len) # 2 new evaluations of forcing_func per iteration
-    #rand = np.random.RandomState(seed=seed_in+solver.iteration)
-
-    if flip:
-        u['g'] *= -1.
-
+    rand = np.random.RandomState(seed=seed_in+solver.iteration)
 else:
     file_handler_mode = 'overwrite'
-# Analysis
-###analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.1, mode=file_handler_mode)
-###analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.02, mode=file_handler_mode)
 
-#analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.05, mode=file_handler_mode)
-def sched(iteration, wall_time, sim_time, timestep):
-    if sim_time < 3.07:
-        if iteration % 2500 == 0:
-            return True
-        else:
-            return False
-    else:
-        if iteration % 100 == 0:
-            return True
-        else:
-            return False
-
-if not restart:
-    analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.05, mode=file_handler_mode)
-else:
-    analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, custom_schedule=sched, mode=file_handler_mode)
-#analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.005, mode=file_handler_mode)
+sim_dt_choice = 1e-3
+analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = sim_dt_choice, mode=file_handler_mode)
 
 # scalars
 analysis.add_task(d3.Average(0.5*u@u), name = 'KE')
-analysis.add_task(d3.Average(angm), name = 'Lzu')
+#analysis.add_task(d3.Average(angm), name = 'Lzu')
 analysis.add_task(d3.Average(vort), name = 'W')
 analysis.add_task(d3.Average(vort*vort), name = 'EN')
-#analysis.add_task(d3.Average(Fvort), name = 'FW')
-#analysis.add_task(d3.Average(angF), name = 'LzF')
 #analysis.add_task(d3.Average(-2 * ((ephi@u)(r=1))**2, coords['phi']), name = 'ENbdry')
 #analysis.add_task(d3.Average(d3.lap(u)@d3.lap(u)), name = 'PA')
 #analysis.add_task(d3.Average(-2 * (ephi@u)(r=1) * (er@d3.grad(er@d3.grad((ephi@u))))(r=1), coords['phi']), name='PAbdry1')
 #analysis.add_task(d3.Average(2 * (ephi@u)(r=1) * (er@d3.grad(ephi@d3.grad((er@u))))(r=1), coords['phi']), name='PAbdry2')
 
-#r_scal = dist.Field(bases=disk)
-#r2_scal = dist.Field(bases=disk)
-rcos_scal = dist.Field(bases=disk)
-rsin_scal = dist.Field(bases=disk)
-#r_scal.change_scales(dealias)
-#r2_scal.change_scales(dealias)
-rcos_scal.change_scales(dealias)
-rsin_scal.change_scales(dealias)
-#r_scal['g'] = r_deal * pow(phi_deal, 0)
-#r2_scal['g'] = pow(r_deal, 2) * pow(phi_deal, 0)
-rcos_scal['g'] = r_deal * np.cos(phi_deal)
-rsin_scal['g'] = r_deal * np.sin(phi_deal)
-#om0density = r_scal * vort
-om1cdensity = rcos_scal * vort
-om1sdensity = -rsin_scal * vort
-#analysis.add_task(d3.Average(om0density), name = 'om0')
-analysis.add_task(d3.Average(om1cdensity), name = 'om1c')
-analysis.add_task(d3.Average(om1sdensity), name = 'om1s')
-#nu0density = r_scal * 2 * nu * d3.lap(vort)
-#analysis.add_task(d3.Average(nu0density), name = 'nu0') # I want to see if we get a closed result with just the linear terms in Eq. (1) (i.e., rhs does not contribute in avg)
-#nu1cdensity = rcos_scal * 2 * nu * d3.lap(vort)
-#analysis.add_task(d3.Average(nu1cdensity), name = 'nu1c')
-#nu1sdensity = rsin_scal * 2 * nu * d3.lap(vort)
-#analysis.add_task(d3.Average(nu1sdensity), name = 'nu1s')
-# if I want to track averages of psi itself, then I will need to solve some LBVPs... I would rather do that in post 
-
 # profiles
-um0 = d3.Average(ephi@u, coords['phi'])
-analysis.add_task(um0, name = 'um0') # dpsi_0/dr
+um0 = d3.Average(u@ephi, coords['phi'])
+analysis.add_task(um0, name = 'um0')
 vortm0 = d3.Average(vort, coords['phi'])
 analysis.add_task(vortm0, name = 'vortm0')
 pvortm0 = d3.Average(pvort, coords['phi'])
 analysis.add_task(pvortm0, name = 'pvortm0')
-drvortm0 = er@d3.grad(vortm0) # dlappsi_0/dr
+drvortm0 = er@d3.grad(vortm0)
 analysis.add_task(drvortm0, name = 'drvortm0')
 drpvortm0 = er@d3.grad(pvortm0)
 analysis.add_task(drpvortm0, name = 'drpvortm0')
@@ -384,11 +334,6 @@ analysis.add_task(drpvortm0, name = 'drpvortm0')
 #analysis.add_task(dr2vortm0, name = 'dr2vortm0')
 dr2pvortm0 = er@d3.grad(drpvortm0)
 analysis.add_task(dr2pvortm0, name = 'dr2pvortm0')
-
-#um0 = d3.Average(u, coords['phi'])
-#analysis.add_task(um0, name = 'um0')
-#u2m0 = d3.Average(u@u , coords['phi'])
-#analysis.add_task(u2m0, name='u2m0')
 
 # snapshots
 analysis.add_task(vort, layout='g', name='vort')
@@ -400,10 +345,6 @@ flow = d3.GlobalFlowProperty(solver, cadence=10)
 flow.add_property(u@u, name='u2')
 flow.add_property(vort*vort, name = 'w2')
 
-#if gamma != 0:
-#    max_dt_choice = safety * np.min( ( np.sqrt(eps/alpha)/(2*np.pi/Nphi), 1/(gamma/2) ) )
-#else:
-#    max_dt_choice = 1e-4
 max_dt_choice = 1e-4
 logger.info('setting max_dt as %e' %(max_dt_choice))
 CFL = d3.CFL(solver, initial_dt=tstep, cadence=5, safety=safety, threshold=0.05, max_dt=max_dt_choice)
@@ -413,20 +354,75 @@ CFL.add_velocity(u)
 checkpoints = solver.evaluator.add_file_handler('checkpoints_' + output_suffix, sim_dt = 1, max_writes = 1, mode=file_handler_mode)
 checkpoints.add_tasks(solver.state)
 
+# Non-trivial initial condition
+#ring_init = True
+v_init=dist.VectorField(coords, bases=disk)
+v_init.preset_scales(dealias)
+u_init = dist.VectorField(coords, bases=disk)
+u_init.preset_scales(dealias)
+norm_goal = eps/(2*np.pi*alpha)
+nseeds = 100
+randinit_1 = np.random.RandomState(seed=int(seed_in*2))
+randinit_2 = np.random.RandomState(seed=int(seed_in*3))
+for n in range(int(nseeds/2)):
+    phasesinit_1 = randinit_1.uniform(0,2*np.pi,k_len)
+    init_1 = np.real(transform_vector @ np.exp(1j*phasesinit_1))
+    if ring_init:
+        init_1 *= 0.5*(1-np.tanh( (r_deal-0.75)/width ))
+    v_init['g'] = init_1
+    anginit_1=d3.integ(rvec@d3.skew(v_init)).evaluate()
+    if rank == 0:
+        data = [anginit_1['g'][0][0]]*size
+    else:
+        data = None
+    anginit_1_int= MPI.COMM_WORLD.scatter(data, root=0)
+   
+    phasesinit_2 = randinit_2.uniform(0,2*np.pi,k_len)
+    init_2 = np.real(transform_vector @ np.exp(1j*phasesinit_2))
+    if ring_init:
+        init_2 *= 0.5*(1-np.tanh( (r_deal-0.75)/width ))
+    v_init['g'] = init_2
+    anginit_2=d3.integ(rvec@d3.skew(v_init)).evaluate() 
+    if rank == 0:
+        data = [anginit_2['g'][0][0]]*size
+    else:
+        data = None
+    anginit_2_int= MPI.COMM_WORLD.scatter(data, root=0)
+
+    u_init['g'] += init_1/anginit_1_int - init_2/anginit_2_int
+    
+norm = d3.Average(0.5*u_init@u_init).evaluate()
+if rank == 0:
+    data = [norm['g'][0][0]]*size
+else:
+    data = None
+norm_int = MPI.COMM_WORLD.scatter(data, root=0)
+u.preset_scales(dealias)
+u['g'] = u_init['g'] * np.sqrt(norm_goal/norm_int)
+if flip:
+    u['g'] *= -1.
+
+print("Initial energy: ", d3.Average(0.5*u@u).evaluate()['g'])
+
 # Main loop
 try:
     logger.info('Starting main loop')
     while solver.proceed:
         tstep = CFL.compute_timestep()
         solver.step(tstep)
-        if (solver.iteration-1) % 100 == 0:
+        if (solver.iteration-1) % 10 == 0:
             max_u = np.sqrt(flow.max('u2'))
             ke_avg = flow.grid_average('u2')
             en_avg = flow.grid_average('w2')
             logger.info("Iteration=%i, Time=%e, dt=%e, max(u)=%e, Kavg=%e, Zavg=%e" %(solver.iteration, solver.sim_time, tstep, max_u, ke_avg, en_avg))
             if max_u > 1e4 or np.isnan(max_u):
-                print(max_u)
+                print("max_u break", max_u)
                 break
+        #if solver.sim_time >= t_switch:
+        #    max_dt_choice = later_max_dt
+        #    logger.info('setting max_dt as %e' %(max_dt_choice))
+        #    CFL = d3.CFL(solver, initial_dt=tstep, cadence=5, safety=safety, threshold=0.05, max_dt=max_dt_choice)
+        #    CFL.add_velocity(u)
 except:
     logger.error('Exception raised, triggering end of main loop.')
     raise

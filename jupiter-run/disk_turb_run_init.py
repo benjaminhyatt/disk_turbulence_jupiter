@@ -25,7 +25,8 @@ Options:
     --restart_hyst=<bool>       flag that this run starts from a previous checkpoint, from a different gamma [default: False]
     --hystn=<int>               experiment number [default: 1]
 
-    --tau_mod=<bool>            flag False to use default lift operator, True to use suggested modification [default: True]
+    --tau_mod=<bool>            flag False to use default lift operator, True to use suggested modification [default: False]
+    --ring_init=<bool>          turns off energy in initial condition as r approaches the boundary [default: True]
 
     --restart_eps_0=<bool>      flag that this run starts from a previous checkpoint, but turning the forcing off [default: False]
     --restart_evolved=<bool>    indicate in output names that this run starts from a checkpoint from a run with different parameters [default: False]
@@ -59,6 +60,8 @@ logger.info("args read in")
 if rank == 0:
     print(args)
 
+from fractions import Fraction
+
 seed_in = int(args['--seed'])
 flip = eval(args['--flip'])
 
@@ -66,7 +69,7 @@ alpha = float(args['--alpha'])
 gamma = float(args['--gamma'])
 eps = float(args['--eps'])
 amp = np.sqrt(eps)
-nu = float(args['--nu'])
+nu = float(Fraction(args['--nu']))
 k_force = int(2 * int(args['--kf'])) # integer periods along a cart axis
 logger.info("k_force, adjusted: %d" %(k_force))
 
@@ -85,6 +88,7 @@ if restart or restart_evolved or restart_eps_0 or restart_hyst:
     restart_dir = args['--restart_dir']
 
 tau_mod = eval(args['--tau_mod'])
+ring_init = eval(args['--ring_init'])
 
 safety = float(args['--safety'])
 timestepper_str = args['--timestepper']
@@ -98,6 +102,7 @@ output_suffix += '_alpha_{:.1e}'.format(alpha)
 output_suffix += '_ring_{:d}'.format(ring)
 output_suffix += '_restart_evolved_{:d}'.format(restart_evolved)
 output_suffix += '_tau_mod_{:d}'.format(tau_mod)
+output_suffix += '_ring_init_{:d}'.format(ring_init)
 output_suffix += '_seed_{:d}'.format(seed_in)
 output_suffix += '_safety_{:.1e}'.format(safety)
 output_suffix += '_timestepper_' + timestepper_str
@@ -237,7 +242,6 @@ pvort = vort + G
 # Problem
 problem = d3.IVP([p, u, tau_u, tau_p], namespace=locals())
 problem.add_equation("div(u) + tau_p = 0")
-
 if not implicit:
     if tau_mod:
         if restart_eps_0:
@@ -275,14 +279,17 @@ except:
 problem.add_equation("integ(p) = 0")
 
 # timestepping
-stop_time = 8/alpha
+stop_time = 10 #2.5 #8/alpha
 if timestepper_str.upper() == 'SBDF2':
     timestepper = d3.SBDF2
 elif timestepper_str.upper() == 'RK443':
     timestepper = d3.RK443
 elif timestepper_str.upper() == 'RK222':
     timestepper = d3.RK222
-tstep = 1e-5
+#tstep = 1e-5
+tstep = 1e-6 
+#tstep = 1e-7
+
 
 # Solver
 logger.info('building solver')
@@ -302,18 +309,46 @@ else:
     file_handler_mode = 'overwrite'
 # Analysis
 #analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.005, mode=file_handler_mode)
-analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.05, mode=file_handler_mode)
+
+#def sched(iteration, wall_time, sim_time, timestep):
+#    if sim_time < 1.9:
+#        if iteration % 2500 == 0:
+#            return True
+#        else:
+#            return False
+#    else:
+#        if iteration % 100 == 0:
+#            return True
+#        else:
+#            return False
+#analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, custom_schedule=sched, mode=file_handler_mode)
+
+# typical Rossby wave time scale
+#rossby_freq_def = lambda k, m, gam: m * gam * k**(-2)
+#rossby_freq_est = rossby_freq_def(2*np.pi, 1, gamma)
+#rossby_period_est = 2*np.pi/rossby_freq_est
+# analysis cadence
+#period_exp = np.floor(np.log10(np.abs(rossby_period_est)))
+#period_round = np.round(rossby_period_est / 10**period_exp, 0) * 10**period_exp
+#sim_dt_choice = np.min((0.05, 0.1 * period_round))
+#logger.info("Rossby period estimate: %e, analysis cadence: %e" %(rossby_period_est, sim_dt_choice))
+
+sim_dt_choice = 5e-4
+analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = sim_dt_choice, mode=file_handler_mode)
+
 # scalars
 analysis.add_task(d3.Average(0.5*u@u), name = 'KE')
-analysis.add_task(d3.Average(angm), name = 'Lzu')
+#analysis.add_task(d3.Average(angm), name = 'Lzu')
 analysis.add_task(d3.Average(vort), name = 'W')
 analysis.add_task(d3.Average(vort*vort), name = 'EN')
-analysis.add_task(d3.Average(-2 * ((ephi@u)(r=1))**2, coords['phi']), name = 'ENbdry')
-analysis.add_task(d3.Average(d3.lap(u)@d3.lap(u)), name = 'PA')
-analysis.add_task(d3.Average(-2 * (ephi@u)(r=1) * (er@d3.grad(er@d3.grad((ephi@u))))(r=1), coords['phi']), name='PAbdry1')
-analysis.add_task(d3.Average(2 * (ephi@u)(r=1) * (er@d3.grad(ephi@d3.grad((er@u))))(r=1), coords['phi']), name='PAbdry2')
+#analysis.add_task(d3.Average(-2 * ((ephi@u)(r=1))**2, coords['phi']), name = 'ENbdry')
+#analysis.add_task(d3.Average(d3.lap(u)@d3.lap(u)), name = 'PA')
+#analysis.add_task(d3.Average(-2 * (ephi@u)(r=1) * (er@d3.grad(er@d3.grad((ephi@u))))(r=1), coords['phi']), name='PAbdry1')
+#analysis.add_task(d3.Average(2 * (ephi@u)(r=1) * (er@d3.grad(ephi@d3.grad((er@u))))(r=1), coords['phi']), name='PAbdry2')
 
 # profiles
+um0 = d3.Average(u@ephi, coords['phi'])
+analysis.add_task(um0, name = 'um0')
 vortm0 = d3.Average(vort, coords['phi'])
 analysis.add_task(vortm0, name = 'vortm0')
 pvortm0 = d3.Average(pvort, coords['phi'])
@@ -337,9 +372,11 @@ flow = d3.GlobalFlowProperty(solver, cadence=10)
 flow.add_property(u@u, name='u2')
 flow.add_property(vort*vort, name = 'w2')
 
+max_dt_choice_init = 1e-6 # initial transient
+t_switch = 1e0
 max_dt_choice = 1e-4
-logger.info('setting max_dt as %e' %(max_dt_choice))
-CFL = d3.CFL(solver, initial_dt=tstep, cadence=5, safety=safety, threshold=0.05, max_dt=max_dt_choice)
+logger.info('setting max_dt as %e' %(max_dt_choice_init))
+CFL = d3.CFL(solver, initial_dt=tstep, cadence=1, safety=safety, threshold=0.05, max_dt=max_dt_choice_init)
 CFL.add_velocity(u)
 
 # Checkpoints
@@ -347,7 +384,7 @@ checkpoints = solver.evaluator.add_file_handler('checkpoints_' + output_suffix, 
 checkpoints.add_tasks(solver.state)
 
 # Non-trivial initial condition
-ring_init = True
+#ring_init = True
 v_init=dist.VectorField(coords, bases=disk)
 v_init.preset_scales(dealias)
 u_init = dist.VectorField(coords, bases=disk)
@@ -395,7 +432,7 @@ if flip:
     u['g'] *= -1.
 
 print("Initial energy: ", d3.Average(0.5*u@u).evaluate()['g'])
-    
+
 # Main loop
 try:
     logger.info('Starting main loop')
@@ -410,11 +447,10 @@ try:
             if max_u > 1e4 or np.isnan(max_u):
                 print("max_u break", max_u)
                 break
-        #if solver.sim_time >= t_switch:
-        #    max_dt_choice = later_max_dt
-        #    logger.info('setting max_dt as %e' %(max_dt_choice))
-        #    CFL = d3.CFL(solver, initial_dt=tstep, cadence=5, safety=safety, threshold=0.05, max_dt=max_dt_choice)
-        #    CFL.add_velocity(u)
+        if solver.sim_time >= t_switch:
+            logger.info('setting max_dt as %e' %(max_dt_choice))
+            CFL = d3.CFL(solver, initial_dt=tstep, cadence=5, safety=safety, threshold=0.05, max_dt=max_dt_choice)
+            CFL.add_velocity(u)
 except:
     logger.error('Exception raised, triggering end of main loop.')
     raise

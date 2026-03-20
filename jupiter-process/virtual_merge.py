@@ -122,7 +122,9 @@ ends_indiv = np.empty(nfiles, dtype=np.int_)
 starts_merge = np.empty(nfiles, dtype=np.int_)
 ends_merge = np.empty(nfiles, dtype=np.int_)
 for j in range(nfiles):
+    print(j)
     i = nfiles - j - 1
+    print(times_read[i])
     if j == 0:
         ends_indiv[i] = times_read[i].shape[0] - 1
     else:

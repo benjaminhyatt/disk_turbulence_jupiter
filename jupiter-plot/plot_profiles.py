@@ -36,10 +36,10 @@ def main(filename, start, count, output):
     plt.rcParams['font.size'] = 11
     plt.rcParams['figure.dpi'] = dpi
 
-    t_mar, b_mar, l_mar, r_mar = (0.1, 0.2, 0.25, 0.1)
+    t_mar, b_mar, l_mar, r_mar = (0.1, 0.2, 0.35, 0.1)
     golden_mean = (np.sqrt(5) - 1.) / 2.
     h_plot, w_plot = (1., 1. / golden_mean)
-    h_pad = 0.2 * h_plot
+    h_pad = 0.25 * h_plot
     h_total = t_mar + h_plot + h_pad + h_plot + h_pad + h_plot + b_mar
     w_total = l_mar + w_plot + r_mar
 
@@ -110,10 +110,10 @@ def main(filename, start, count, output):
 
         # profiles of the second radial derivative of pv
         ax3 = fig.add_axes([left3, bottom3, width3, height3])
-        ax3.axhline(0., color = 'gray')
         ax3.plot(r, dr2pvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$\partial_r^2 q$ time average')
         ax3.plot(r, dr2pvortm0[index], color = 'orange', linewidth = 1.5, label = r'$\partial_r^2 q$')
         ax3.set_xlabel(r'$r$')
+        ax3.set_yscale('symlog', linthresh = 1e4)
         ax3.legend(loc = 'lower left')
 
         # Add time title
@@ -133,22 +133,26 @@ def main(filename, start, count, output):
         fig = plt.figure(figsize = (scale * w_total, scale * h_total))
         # profiles of vorticity and potential vorticity
         ax1 = fig.add_axes([left1, bottom1, width1, height1])
-        ax1.plot(r, vortm0_tavg, color = 'black', linewidth = 2.25, label = r'$\omega$ time average')
-        ax1.plot(r, pvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$q$ time average')
+        ax1.plot(r, vortm0_tavg, color = 'black', linewidth = 2.25, label = r'$\omega$')
+        ax1.plot(r, pvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$q = \omega - \frac{1}{2}\gamma r^2$')
         ax1.set_xlabel(r'$r$')
+        ax1.set_ylabel('time-averaged profile')
         ax1.legend(loc = 'lower left')
 
         # profiles of their first radial derivatives
         ax2 = fig.add_axes([left2, bottom2, width2, height2])
-        ax2.plot(r, drvortm0_tavg, color = 'black', linewidth = 2.25, label = r'$\partial_r \omega$ time average')
-        ax2.plot(r, drpvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$\partial_r q$ time average')
+        ax2.plot(r, drvortm0_tavg, color = 'black', linewidth = 2.25, label = r'$\partial_r \omega$')
+        ax2.plot(r, drpvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$\partial_r q$')
         ax2.set_xlabel(r'$r$')
+        ax2.set_ylabel('time-averaged profile')
         ax2.legend(loc = 'lower left')
 
         # profiles of the second radial derivative of pv
         ax3 = fig.add_axes([left3, bottom3, width3, height3])
-        ax3.plot(r, dr2pvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$\partial_r^2 q$ time average')
+        ax3.plot(r, dr2pvortm0_tavg, color = 'red', linewidth = 2.25, label = r'$\partial_r^2 q$')
         ax3.set_xlabel(r'$r$')
+        ax3.set_ylabel('time-averaged profile')
+        ax3.set_yscale('symlog', linthresh = 1e4)
         ax3.legend(loc = 'lower left')
 
         # Save figure

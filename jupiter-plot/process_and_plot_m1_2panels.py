@@ -159,7 +159,7 @@ def main(filename, start, count, output, options):
     w_pad = 0.35 * w_plot
     h_cbar = 0.05 * h_plot
     w_cbar = w_plot
-    h_total = t_mar + h_plot + h_cbar + h_pad + h_plot + h_cbar + b_mar
+    h_total = t_mar + h_plot + h_cbar + b_mar
     w_total = l_mar + w_plot + w_pad + w_plot + r_mar
 
     fig_width = 5.5
@@ -178,16 +178,6 @@ def main(filename, start, count, output, options):
     width2 = w_plot / w_total
     height2 = h_plot / h_total
 
-    left3 = (l_mar) / w_total
-    bottom3 = 1 - (t_mar + h_plot + h_cbar + h_pad + h_plot) / h_total
-    width3 = w_plot / w_total
-    height3 = h_plot / h_total
-
-    left4 = (l_mar + w_plot + w_pad) / w_total
-    bottom4 = 1 - (t_mar + h_plot + h_cbar + h_pad + h_plot) / h_total
-    width4 = w_plot / w_total
-    height4 = h_plot / h_total
-
     leftc1 = (l_mar) / w_total
     bottomc1 = 1 - (t_mar + h_plot + h_cbar) / h_total
     widthc1 = w_plot / w_total
@@ -197,11 +187,6 @@ def main(filename, start, count, output, options):
     bottomc2 = 1 - (t_mar + h_plot + h_cbar) / h_total
     widthc2 = w_plot / w_total
     heightc2 = h_cbar / h_total
-
-    leftc3 = (l_mar) / w_total
-    bottomc3 = 1 - (t_mar + h_plot + h_cbar + h_pad + h_plot + h_cbar) / h_total
-    widthc3 = w_plot / w_total
-    heightc3 = h_cbar / h_total
 
     # Plot writes
     progress_cad = np.ceil(count/20)
@@ -247,31 +232,6 @@ def main(filename, start, count, output, options):
         cax2 = fig.add_axes([leftc2, bottomc2, widthc2, heightc2])
         cbar2 = fig.colorbar(mesh2, cax=cax2, orientation='horizontal')
 
-        ax3 = fig.add_axes([left3, bottom3, width3, height3])
-        lim3 = max(abs(Z_fit.min()), abs(Z_fit.max()))
-        mesh3 = ax3.pcolormesh(X, Y, Z_fit, shading='auto', cmap='RdBu_r', vmin = -lim3, vmax = lim3)
-        if plottracking and index in ws:
-            ax3.scatter(x_loc, y_loc, color = 'black', lw = 0.5)
-        ax3.xaxis.set_visible(False)
-        ax3.yaxis.set_visible(False)
-        ax3.set_frame_on(False)
-        ax3.set_title(r'fit ($a =$' + '{:.2f}'.format(pars[0]) + r', $b =$' + '{:.2f}'.format(pars[1]) + r', $\omega = $' + '{:.2f}'.format(pars[2]) + ')')
-        cax3 = fig.add_axes([leftc3, bottomc3, widthc3, heightc3])
-        cbar3 = fig.colorbar(mesh3, cax=cax3, orientation='horizontal')
-
-        ax4 = fig.add_axes([left4, bottom4, width4, height4])
-        if plottracking and index in ws:     
-            ax4.plot(r_deal[0, :], Z_m1[phi_locs[idx_track], :], color = 'blue', label = r'$m = 1$ data')
-            ax4.plot(r_deal[0, :], Z_fit[phi_locs[idx_track], :], color = 'orange', label = r'fit')
-            ax4.axvline(r_locs[idx_track], linestyle = 'dashed', color = 'black')
-        else:
-            ax4.plot(r_deal[0, :], Z_m1[phi_choice, :], color = 'blue', label = r'$m = 1$ projection')
-            ax4.plot(r_deal[0, :], Z_fit[phi_choice, :], color = 'orange', label = r'fit')
-            
-        ax4.set_xlabel(r'$r$')
-        ax4.legend(loc = 'lower left')
-        ax4.set_title(r'profile, $\phi =$'+ '{:.3f}'.format(phi_choice_val))
-
         # Add time title
         title = title_func(f['scales/sim_time'][index])
         title_height = 1 - 0.125 * t_mar
@@ -285,12 +245,12 @@ def main(filename, start, count, output, options):
     plt.close(fig)
 
     # output fit results
-    out_name = 'processed_m1_' + str(rank)
+    out_name = 'processed_m1_v2_' + str(rank)
     processed = {}
     processed['ws'] = np.arange(start, start+count)
     processed['pars'] = processed_pars
     processed['phi_choices'] = phi_choices
-    print('rank ' + str(rank) + ' saving output as processed_m1_' + output_suffix + '_' + str(rank) + '.npy')
+    print('rank ' + str(rank) + ' saving output as processed_m1_' + output_suffix + '_' + str(rank) + '_v2.npy')
     np.save(out_name + '.npy', processed)
 
 if __name__ == "__main__":

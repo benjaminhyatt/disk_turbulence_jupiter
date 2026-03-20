@@ -2,7 +2,7 @@
 Plot disk outputs from simulations with fixed parameters. (File naming conventions on other types of runs may need additional accomodations)
 
 Usage:
-    plot_disk.py <files>... [--output=<dir> --pvort=<bool> --tracking=<bool> --circle=<bool> --radius=<float>]
+    plot_disk.py <files>... [--output=<dir> --pvort=<bool> --tracking=<bool> --circle=<bool> --radius=<float> --symlog=<bool>]
 
 Options:
     --output=<dir>      output directory [default: ./frames]
@@ -11,6 +11,7 @@ Options:
     
     --circle=<bool>     whether to plot a circle to highlight a particular radius [default: False]
     --radius=<float>    radius at which to plot circle [default: None]
+    --symlog=<bool>     whether to specify a symlog norm (not recommended if also plotting pvort--that case would need more careful treatment) [default: False]
 """
 
 import h5py
@@ -20,26 +21,33 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from dedalus.extras import plot_tools
 
+#from scipy.stats import norm
+
+from mpi4py import MPI 
+rank = MPI.COMM_WORLD.rank
+size = MPI.COMM_WORLD.Get_size()
+comm = MPI.COMM_WORLD
+
 # Configure the logging format to include the time
 import logging
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-def main(filename, start, count, output, options):
+def main(filename, start, count, output, args):
     """Save plot of specified tasks for given range of analysis writes."""
 
-    plotpvort, plottracking, plotcircle, plotradius = options
+    plotpvort, plottracking, plotcircle, plotradius, plotsymlog, thresh = args
 
     if plotpvort:
         tasks = ['vort', 'pvort']
     else:
         tasks = ['vort']
 
-    cmap = plt.cm.RdBu_r
+    cmap = 'RdBu_r'
     savename_func = lambda write: 'write_{:06}.png'.format(write)
-    title_func = lambda sim_time: 't = {:.3f}'.format(sim_time)
-    dpi = 600 #200
+    title_func = lambda sim_time: 't = {:.7f}'.format(sim_time)
+    dpi = 400 #600 #200
     func = lambda phi, r, data: (r*np.cos(phi), r*np.sin(phi), data)
 
     # Layout
@@ -59,6 +67,7 @@ def main(filename, start, count, output, options):
     # Plotting loop
     progress_cad = np.ceil(count/100)
     with h5py.File(filename, mode='r') as file:
+        
         for index in range(start, start+count):
             for n, task in enumerate(tasks):
                 # Build subfigure axes
@@ -70,8 +79,10 @@ def main(filename, start, count, output, options):
                 dset_phis = np.array(dset.dims[1][0])
                 
                 # main plot
-                paxes, caxes = plot_tools.plot_bot_3d(dset, 0, index, axes=axes, title=task, even_scale=True, visible_axes=False, func=func, cmap=cmap)
-
+                if not plotsymlog:
+                    paxes, caxes = plot_tools.plot_bot_3d(dset, 0, index, axes=axes, title=task, even_scale=True, visible_axes=False, func=func, cmap=cmap)
+                else:
+                    paxes, caxes = plot_tools.plot_bot_3d(dset, 0, index, axes=axes, title=task, even_scale=True, visible_axes=False, func=func, cmap=cmap, normopt='symlog', thresh=thresh)
                 if plottracking and (index in ws):
                     x_loc = r_locs[index - ws[0]] * np.cos(phi_locs[index - ws[0]])
                     y_loc = r_locs[index - ws[0]] * np.sin(phi_locs[index - ws[0]])
@@ -82,13 +93,8 @@ def main(filename, start, count, output, options):
                     circ_x = plotradius * np.cos(dset_phis)
                     circ_y = plotradius * np.sin(dset_phis)
                     paxes.plot(circ_x, circ_y, color = "purple", lw = 0.5)
-                    #paxes.plot(circ_x, circ_y, color = "purple", linestyle = "dotted", label = r'$r = \langle L_{\gamma} \rangle$')
-                    #paxes.legend(loc = 'lower left', fontsize = 6)
-                
                 paxes.axis('off')
-                caxes.cla()
-                caxes.axis('off')
-            
+
             # Add time title
             title = title_func(file['scales/sim_time'][index])
             title_height = 1 - 0.5 * mfig.margin.top / mfig.fig.y
@@ -115,8 +121,6 @@ if __name__ == "__main__":
     from dedalus.tools.logging import *
     logger = logging.getLogger(__name__)
 
-    
-
     output_path = pathlib.Path(args['--output']).absolute()
     # Create output directory if needed
     with Sync() as sync:
@@ -127,9 +131,10 @@ if __name__ == "__main__":
     plotpvort = eval(args['--pvort'])
     plottracking = eval(args['--tracking'])
     plotcircle = eval(args['--circle'])
+    plotsymlog = eval(args['--symlog'])
 
     # string parsing if we want to load in additional files from processing
-    if plottracking or plotcircle:
+    if plottracking or plotcircle or plotsymlog:
         ### string parsing to identify parameters ###
         def str_to_float(a):
             first = float(a[0])
@@ -166,7 +171,6 @@ if __name__ == "__main__":
         nu = nu_vals[np.argmin(np.abs(nu_vals - nu_read))]
 
     if plottracking:
-        #processed_tracking = np.load('../jupiter-process/processed_tracking_nu_5em05_gam_2d5ep03_kf_4d0ep01_Nphi_1280_Nr_640_eps_1d0ep00_alpha_3d3em02_ring_0_restart_evolved_0_tau_mod_1_seed_31415926_safety_1d0em01_timestepper_SBDF2_ncc_cutoff1d0em06_implicit_0.npy', allow_pickle = True)[()]
         processed_tracking = np.load('../jupiter-process/processed_tracking_' + output_suffix + '.npy', allow_pickle = True)[()]
 
         r_locs = processed_tracking['r_locs']
@@ -191,7 +195,13 @@ if __name__ == "__main__":
             plotradius = float(args['--radius'])
     else:
         plotradius = None
-    
-    options_in = [plotpvort, plottracking, plotcircle, plotradius]
 
-    post.visit_writes(args['<files>'], main, output=output_path, options=options_in)
+    if plotsymlog:
+        processed_scalars = np.load('../jupiter-process/processed_scalars_' + output_suffix + '.npy', allow_pickle = True)[()]
+        thresh = 0.5 * processed_scalars['w_rms']
+    else:
+        thresh = None
+    
+    args_in = [plotpvort, plottracking, plotcircle, plotradius, plotsymlog, thresh]
+
+    post.visit_writes(args['<files>'], main, output=output_path, args=args_in)

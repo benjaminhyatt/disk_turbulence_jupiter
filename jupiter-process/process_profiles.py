@@ -52,6 +52,39 @@ drvortm0 = np.array(f1['tasks/drvortm0'][:, 0, :])
 drpvortm0 = np.array(f1['tasks/drpvortm0'][:, 0, :])
 dr2pvortm0 = np.array(f1['tasks/dr2pvortm0'][:, 0, :])
 
+Nr = vortm0.shape[1]
+print(Nr)
+Nphi = int(2*Nr)
+
+try: 
+    um0 = np.array(f1['tasks/um0'][:, 0, :])
+except:
+    import dedalus.public as d3
+    dealias = 3/2
+    dtype = np.float64
+
+    coords = d3.PolarCoordinates('phi', 'r')
+    dist = d3.Distributor(coords, dtype=dtype)
+    disk = d3.DiskBasis(coords, shape=(Nphi, Nr), radius=1, dealias=dealias, dtype=dtype)
+    ephi = dist.VectorField(coords, bases=disk) #Vector ephi
+    ephi['g'][0] = 1 
+    radial_basis = disk.radial_basis
+ 
+    u = dist.VectorField(coords, name='u', bases=disk)
+    #um0r = dist.Field(bases=radial_basis)
+    #um0 = np.zeros((nw, Nr))
+    um0 = np.zeros((nw, int(dealias*Nr)))
+    for w in range(nw):
+        u.load_from_hdf5(f1, w)
+        u.change_scales(dealias)
+        uphi = u@ephi
+        um0r = d3.Average(uphi, coords['phi']).evaluate()
+        #um0r.change_scales(1)
+        if w % 10 == 0:
+            print(w, nw)
+        um0[w, :] = np.copy(um0r['g'])
+
+
 # take time averages
 tdur = 1.5/alpha
 tendidx = -1
@@ -59,6 +92,7 @@ tend = t[tendidx]
 tstartidx = np.where(t >= tend - tdur)[0][0]
 tstart = t[tstartidx]
 
+um0_tavg = np.mean(um0[tstartidx:tendidx, :], axis = 0)
 vortm0_tavg = np.mean(vortm0[tstartidx:tendidx, :], axis = 0)
 pvortm0_tavg = np.mean(pvortm0[tstartidx:tendidx, :], axis = 0)
 drvortm0_tavg = np.mean(drvortm0[tstartidx:tendidx, :], axis = 0)
@@ -73,6 +107,8 @@ processed['ws'] = ws
 processed['tw'] = tw
 
 processed['r'] = np.array(f1['tasks/vortm0'].dims[2][0])
+processed['um0'] = um0
+processed['um0_tavg'] = um0_tavg
 processed['vortm0'] = vortm0
 processed['vortm0_tavg'] = vortm0_tavg
 processed['pvortm0'] = pvortm0
