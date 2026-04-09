@@ -36,6 +36,7 @@ Options:
 
     --ncc_cutoff=<float>        value of ncc_cutoff [default: 1e-6]
     --implicit=<bool>           flag True to treat Coriolis term implicitly [default: False]
+    --init_max_dt=<float>       maximum_initial_dt [default: 1e-6]
 """
 
 import numpy as np
@@ -95,6 +96,7 @@ timestepper_str = args['--timestepper']
 
 ncc_cutoff = float(args['--ncc_cutoff'])
 implicit = eval(args['--implicit'])
+init_max_dt = float(args['--init_max_dt'])
 
 output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.1e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) 
 output_suffix += '_eps_{:.1e}'.format(eps)
@@ -108,6 +110,7 @@ output_suffix += '_safety_{:.1e}'.format(safety)
 output_suffix += '_timestepper_' + timestepper_str
 output_suffix += '_ncc_cutoff{:.1e}'.format(ncc_cutoff)
 output_suffix += '_implicit_{:d}'.format(implicit)
+output_suffix += '_dt_{:.1e}'.format(init_max_dt)
 if flip:
     output_suffix += '_flip_{:d}'.format(flip)
 output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
@@ -279,7 +282,7 @@ except:
 problem.add_equation("integ(p) = 0")
 
 # timestepping
-stop_time = 10 #2.5 #8/alpha
+stop_time = 0.5 #2.5 #8/alpha
 if timestepper_str.upper() == 'SBDF2':
     timestepper = d3.SBDF2
 elif timestepper_str.upper() == 'RK443':
@@ -287,8 +290,9 @@ elif timestepper_str.upper() == 'RK443':
 elif timestepper_str.upper() == 'RK222':
     timestepper = d3.RK222
 #tstep = 1e-5
-tstep = 1e-6 
+#tstep = 1e-6 
 #tstep = 1e-7
+tstep = init_max_dt
 
 
 # Solver
@@ -372,12 +376,15 @@ flow = d3.GlobalFlowProperty(solver, cadence=10)
 flow.add_property(u@u, name='u2')
 flow.add_property(vort*vort, name = 'w2')
 
-max_dt_choice_init = 1e-6 # initial transient
-t_switch = 1e0
-max_dt_choice = 1e-4
+#max_dt_choice_init = 1e-6 # initial transient -- looks good for gamma=0, kf=20, etc.
+max_dt_choice_init = init_max_dt # trying this out for a gamma=0, kf=30 case
+max_dt_choice_switch = 1e-4
+t_switch = 3e-1
 logger.info('setting max_dt as %e' %(max_dt_choice_init))
-CFL = d3.CFL(solver, initial_dt=tstep, cadence=1, safety=safety, threshold=0.05, max_dt=max_dt_choice_init)
+CFL = d3.CFL(solver, initial_dt=0.5*max_dt_choice_init, cadence=1, safety=safety, threshold=0.05, max_dt=max_dt_choice_init)
 CFL.add_velocity(u)
+CFL_switch = d3.CFL(solver, initial_dt=max_dt_choice_init, cadence=1, safety=safety, threshold=0.05, max_dt=max_dt_choice_switch)
+CFL_switch.add_velocity(u)
 
 # Checkpoints
 checkpoints = solver.evaluator.add_file_handler('checkpoints_' + output_suffix, sim_dt = 1, max_writes = 1, mode=file_handler_mode)
@@ -437,7 +444,10 @@ print("Initial energy: ", d3.Average(0.5*u@u).evaluate()['g'])
 try:
     logger.info('Starting main loop')
     while solver.proceed:
-        tstep = CFL.compute_timestep()
+        if solver.sim_time < t_switch:
+            tstep = CFL.compute_timestep()
+        else:
+            tstep = CFL_switch.compute_timestep()
         solver.step(tstep)
         if (solver.iteration-1) % 10 == 0:
             max_u = np.sqrt(flow.max('u2'))
@@ -447,10 +457,6 @@ try:
             if max_u > 1e4 or np.isnan(max_u):
                 print("max_u break", max_u)
                 break
-        if solver.sim_time >= t_switch:
-            logger.info('setting max_dt as %e' %(max_dt_choice))
-            CFL = d3.CFL(solver, initial_dt=tstep, cadence=5, safety=safety, threshold=0.05, max_dt=max_dt_choice)
-            CFL.add_velocity(u)
 except:
     logger.error('Exception raised, triggering end of main loop.')
     raise

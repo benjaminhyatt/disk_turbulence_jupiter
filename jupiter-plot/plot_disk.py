@@ -47,7 +47,7 @@ def main(filename, start, count, output, args):
     cmap = 'RdBu_r'
     savename_func = lambda write: 'write_{:06}.png'.format(write)
     title_func = lambda sim_time: 't = {:.7f}'.format(sim_time)
-    dpi = 400 #600 #200
+    dpi = 800 #400 #600 #200
     func = lambda phi, r, data: (r*np.cos(phi), r*np.sin(phi), data)
 
     # Layout

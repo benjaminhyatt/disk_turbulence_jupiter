@@ -3,7 +3,9 @@ Usage:
     process_profiles.py <file>... [options]
 
 Options:    
-    --output=<str>               prefix in the name of the output file [default: processed_profiles]
+    --output=<str>          prefix in the name of the output file [default: processed_profiles]
+    --t_start=<float>       if provided, the time to begin the t_avg window [default: None]    
+    --t_end=<float>         if provided, the time to end the t_avg window [default: None]
 """
 
 import numpy as np
@@ -28,6 +30,9 @@ print("args read in")
 print(args)
 
 output_prefix = args['--output']
+
+t_start = eval(args['--t_start'])
+t_end = eval(args['--t_end'])
 
 file_str = args['<file>'][0]
 output_suffix = file_str.split('analysis_')[1].split('.')[0].split('/')[0]
@@ -86,11 +91,26 @@ except:
 
 
 # take time averages
-tdur = 1.5/alpha
-tendidx = -1
-tend = t[tendidx]
-tstartidx = np.where(t >= tend - tdur)[0][0]
-tstart = t[tstartidx]
+if (t_start is not None) and (t_end is not None):
+    try:
+        tendidx = np.where(t >= t_end)[0][0]
+        tend = t[tendidx]
+        tstartidx = np.where(t >= t_start)[0][0]
+        tstart = t[tstartidx]
+    except:
+        print("Provided t_start and t_end not compatible with sim times, trying default")
+        print("t", t)
+        tdur = 1.5/alpha
+        tendidx = -1
+        tend = t[tendidx]
+        tstartidx = np.where(t >= tend - tdur)[0][0]
+        tstart = t[tstartidx] 
+else:
+    tdur = 1.5/alpha
+    tendidx = -1
+    tend = t[tendidx]
+    tstartidx = np.where(t >= tend - tdur)[0][0]
+    tstart = t[tstartidx]
 
 um0_tavg = np.mean(um0[tstartidx:tendidx, :], axis = 0)
 vortm0_tavg = np.mean(vortm0[tstartidx:tendidx, :], axis = 0)

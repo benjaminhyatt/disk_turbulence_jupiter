@@ -274,7 +274,8 @@ except:
 problem.add_equation("integ(p) = 0")
 
 # timestepping
-stop_time = 8/alpha
+#stop_time = 8/alpha
+stop_time = 1/alpha
 if timestepper_str.upper() == 'SBDF2':
     timestepper = d3.SBDF2
 elif timestepper_str.upper() == 'RK443':
@@ -345,22 +346,22 @@ analysis.add_task(d3.Average(vort*vort), name = 'EN')
 
 #r_scal = dist.Field(bases=disk)
 #r2_scal = dist.Field(bases=disk)
-rcos_scal = dist.Field(bases=disk)
-rsin_scal = dist.Field(bases=disk)
+#rcos_scal = dist.Field(bases=disk)
+#rsin_scal = dist.Field(bases=disk)
 #r_scal.change_scales(dealias)
 #r2_scal.change_scales(dealias)
-rcos_scal.change_scales(dealias)
-rsin_scal.change_scales(dealias)
+#rcos_scal.change_scales(dealias)
+#rsin_scal.change_scales(dealias)
 #r_scal['g'] = r_deal * pow(phi_deal, 0)
 #r2_scal['g'] = pow(r_deal, 2) * pow(phi_deal, 0)
-rcos_scal['g'] = r_deal * np.cos(phi_deal)
-rsin_scal['g'] = r_deal * np.sin(phi_deal)
+#rcos_scal['g'] = r_deal * np.cos(phi_deal)
+#rsin_scal['g'] = r_deal * np.sin(phi_deal)
 #om0density = r_scal * vort
-om1cdensity = rcos_scal * vort
-om1sdensity = -rsin_scal * vort
+#om1cdensity = rcos_scal * vort
+#om1sdensity = -rsin_scal * vort
 #analysis.add_task(d3.Average(om0density), name = 'om0')
-analysis.add_task(d3.Average(om1cdensity), name = 'om1c')
-analysis.add_task(d3.Average(om1sdensity), name = 'om1s')
+#analysis.add_task(d3.Average(om1cdensity), name = 'om1c')
+#analysis.add_task(d3.Average(om1sdensity), name = 'om1s')
 #nu0density = r_scal * 2 * nu * d3.lap(vort)
 #analysis.add_task(d3.Average(nu0density), name = 'nu0') # I want to see if we get a closed result with just the linear terms in Eq. (1) (i.e., rhs does not contribute in avg)
 #nu1cdensity = rcos_scal * 2 * nu * d3.lap(vort)

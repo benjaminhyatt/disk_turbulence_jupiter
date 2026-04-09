@@ -5,8 +5,11 @@ Usage:
     process_rossby_evp.py <file>... [options]
 
 Options:
+    --output=<str>      prefix in the name of the output file [default: processed_rossby_evp] 
     --m=<int>           azimuthal wave number of Rossby modes to solve for [default: 1]
     --inviscid=<bool>   True: solves inviscid EVP with Dirichlet BC, False: solves dissipative EVP with Dirichlet+SF BC [default: True]
+    --save_psi=<bool>   [default: False]
+    --save_vort=<bool>  [default: True]
 """
 import numpy as np
 import h5py
@@ -44,10 +47,13 @@ def str_to_float(a):
     return (first + sec/10) * 10**(sgn * exp)
 
 file_str = args['<file>'][0]
+output = args['--output']
 m = int(args['--m'])
 inviscid = eval(args['--inviscid'])
+save_psi = eval(args['--save_psi'])
+save_vort = eval(args['--save_vort'])
 
-output_prefix = 'processed_rossby_evp'
+output_prefix = output
 output_prefix += '_m_{:d}'.format(m)
 output_prefix += '_inviscid_{:d}'.format(inviscid)
 
@@ -82,51 +88,64 @@ k_force = kf_vals[np.argmin(np.abs(kf_vals - kf_read))]
 ### EVP setup ### 
 
 # Method to accept/reject well-resolved modes based on Chp.7 of Boyd
-def separate_resolved(evals_N_lo, evals_N_hi):
-    
-    # sort by absolute value
-    idx_lo = np.abs(evals_N_lo).argsort()[::-1]
-    evals_N_lo_sort = evals_N_lo[idx_lo]
-    idx_hi = np.abs(evals_N_hi).argsort()[::-1]
-    evals_N_hi_sort = evals_N_hi[idx_hi]
+# Adapted from eigentools/eigenproblem.py (Dedalus) 
+def separate_resolved(evals_N_lo, evals_N_hi, thresh_opts):
 
-    len_lo, len_hi = (evals_N_lo_sort.shape[0], evals_N_hi_sort.shape[0])
+    reverse_eval_lo_indx = np.arange(len(evals_N_lo)) 
+    reverse_eval_hi_indx = np.arange(len(evals_N_hi))
 
-    # calculate separations between adjacent (in abs val) modes from N_lo evals
-    sigmas_lo = np.zeros(len_lo)
-    sigmas_lo[0] = np.abs(evals_N_lo_sort[1] - evals_N_lo_sort[0])
-    for i in range(len_lo-1):
-        sigmas_lo[i] = 0.5*(np.abs(evals_N_lo_sort[i] - evals_N_lo_sort[i-1]) + np.abs(evals_N_lo_sort[i+1]-evals_N_lo_sort[i]))
-    sigmas_lo[-1] = np.abs(evals_N_lo_sort[-2] - evals_N_lo_sort[-1]) 
-    
-    # calulate scaled differences between nearest evals from N_lo and N_hi
-    idx_nearest = [np.argmin(np.abs(evals_N_lo_sort[i] - evals_N_hi_sort)/sigmas_lo[i]) for i in range(len_lo)]
-    deltas = np.array([np.abs(evals_N_lo_sort[i] - evals_N_hi_sort[idx_nearest[i]])/sigmas_lo[i] for i in range(len_lo)]) 
-    
-    # apply threshold to inverse deltas
-    drifts = 1/deltas
-    drift_thresh = 1e3
+    eval_lo_and_indx = np.asarray(list(zip(evals_N_lo, reverse_eval_lo_indx)))
+    eval_hi_and_indx = np.asarray(list(zip(evals_N_hi, reverse_eval_hi_indx)))
 
-    # separate 
-    evals_resolved = evals_N_lo_sort[np.where(drifts > drift_thresh)[0]]
-    evals_unresolved = evals_N_lo_sort[np.where(drifts <= drift_thresh)[0]]    
-    idx_resolved = []
-    idx_unresolved = []
+    eval_lo_and_indx = eval_lo_and_indx[np.isfinite(evals_N_lo)]
+    eval_hi_and_indx = eval_hi_and_indx[np.isfinite(evals_N_hi)]
 
-    for eig in evals_resolved:
-        idx_resolved.append(np.where(evals_N_lo_sort == eig))
-    for eig in evals_unresolved:
-        idx_unresolved.append(np.where(evals_N_lo_sort == eig))
+    eval_lo_and_indx = eval_lo_and_indx[np.argsort(eval_lo_and_indx[:, 0].real)]
+    eval_hi_and_indx = eval_hi_and_indx[np.argsort(eval_hi_and_indx[:, 0].real)]
 
-    return evals_resolved, evals_unresolved, idx_resolved, idx_unresolved
+    eval_lo_sorted = eval_lo_and_indx[:, 0]
+    eval_hi_sorted = eval_hi_and_indx[:, 0]
+
+    sigmas = np.zeros(len(eval_lo_sorted))
+    sigmas[0] = np.abs(eval_lo_sorted[0] - eval_lo_sorted[1])
+    sigmas[1:-1] = [0.5*(np.abs(eval_lo_sorted[j] - eval_lo_sorted[j - 1]) + np.abs(eval_lo_sorted[j + 1] - eval_lo_sorted[j])) for j in range(1, len(eval_lo_sorted) - 1)]
+    sigmas[-1] = np.abs(eval_lo_sorted[-2] - eval_lo_sorted[-1])
+
+    delta_near = np.array([np.nanmin(np.abs(eval_lo_sorted[j] - eval_hi_sorted)/sigmas[j]) for j in range(len(eval_lo_sorted))])
+
+    inverse_drift = 1/delta_near
+
+    # decision making
+    drift_thresh, imag_thresh = thresh_opts
+
+    drift_pass = inverse_drift > drift_thresh
+    drift_fail = inverse_drift <= drift_thresh
+    imag_pass = eval_lo_sorted.imag <= imag_pass
+
+    make_execption = eval_lo_sorted.imag < imag_thresh
+
+    eval_lo_and_indx_res = eval_lo_and_indx[np.where(np.logical_or(drift_pass, imag_pass)]
+    eval_lo_and_indx_bad = eval_lo_and_indx[np.where(drift_fail)]
+    eval_lo_res = eval_lo_and_indx_res[:, 0]
+    eval_lo_bad = eval_lo_and_indx_bad[:, 0]
+    indx_res = eval_lo_and_indx_res[:, 1].real.astype(int)
+    indx_bad = eval_lo_and_indx_bad[:, 1].real.astype(int)
+    drifts_res = inverse_drift[np.where(np.logical_or(drift_pass, imag_pass)]    
+    drifts_bad = inverse_drift[np.where(drift_fail)]
+
+    return eval_lo_res, eval_lo_bad, indx_res, indx_bad, drifts_res, drifts_bad
 
 # Dedalus EVP
 def evp_dense(Nphi, Nr, u0filename, inviscid, params):
-    
+    print("Nphi", Nphi, "Nr", Nr)    
+
     if inviscid:
-        m, gamma = params
+        m, gamma, save_psi, save_vort = params
     else:
-        m, gamma, alpha, nu = params
+        m, gamma, alpha, nu, save_psi, save_vort = params
+
+    if (not save_psi) and (not save_vort):
+        logger.info("Note: only eigenvalues will be returned")
 
     dtype = np.complex128
     dealias = 3/2
@@ -157,22 +176,33 @@ def evp_dense(Nphi, Nr, u0filename, inviscid, params):
     u0file = np.load(u0filename, allow_pickle = True)[()] 
     um0_tavg = u0file['um0_tavg']
     Nr_in = um0_tavg.shape[0]
-    Nphi_b = int(2*Nr_in/dealias)
-    Nr_b = int(Nr_in/dealias)
-    disk_in = d3.DiskBasis(coords, shape=(Nphi_b, Nr_b), radius=1, dtype=dtype)
+    print("Nr_in", Nr_in)
+    #Nr_b = int(Nr_in/dealias)
+    #Nphi_b = int(2*Nr_b)
+    #print("Nr_in", Nr_in, "Nr_b", Nr_b, "Nphi_b", Nphi_b)
+    #disk_in = d3.DiskBasis(coords, shape=(Nphi_b, Nr_b), radius=1, dtype=dtype)
+    #radial_basis_in = disk_in.radial_basis
+    #um0_in = dist.Field(bases=radial_basis_in)
+    #um0_in.change_scales(dealias)
+    #print("um0_in shape", um0_in['g'].shape, "um0_tavg shape", um0_tavg.shape)
+    #um0_in['g'] = np.copy(um0_tavg)
+    disk_in = d3.DiskBasis(coords, shape=(int(2*Nr_in), Nr_in), radius=1, dtype=dtype)
     radial_basis_in = disk_in.radial_basis
     um0_in = dist.Field(bases=radial_basis_in)
-    um0_in.change_scales(dealias)
+    um0_in.change_scales(1)
     um0_in['g'] = np.copy(um0_tavg)
-    
+
     u0.change_scales(dealias)
-    um0_in.change_scales(dealias*Nr/Nr_b)
-    u0['g'] = np.copy(um0_in['g'])
-         
+    um0_in.change_scales(dealias*(Nr/Nr_in))
+    u0['g'][0, :, :] = np.copy(um0_in['g'])
+    u0['g'][1, :, :] *= 0.         
+
     dt = lambda A: 1j*om*A
     if not inviscid:
-        dr = lambda A: er@d3.grad(A)
-        sf = lambda A: dr(dr(A)) - dr(A)
+        #dr = lambda A: er@d3.grad(A)
+        #sf = lambda A: dr(dr(A)) - dr(A)
+        stress = lambda A: 0.5*(d3.grad(A) + d3.trans(d3.grad(A)))
+        u_psi = lambda A: d3.skew(d3.grad(A))
 
     # EVP
     if inviscid:
@@ -181,48 +211,110 @@ def evp_dense(Nphi, Nr, u0filename, inviscid, params):
     else:
         problem = d3.EVP([psi, tau_psi, tau_psi2, tau_psi3], eigenvalue=om, namespace=locals())
         problem.add_equation("dt(lap(psi)) + alpha*lap(psi) - nu*lap(lap(psi)) + u0@grad(lap(psi)) + skew(grad(psi))@grad(f) + lift(tau_psi2, -1) + lift(tau_psi3, -2) + tau_psi = 0")
-        problem.add_equation("sf(psi)(r=1) = 0")
+        #problem.add_equation("sf(psi)(r=1) = 0")
+        problem.add_equation("azimuthal(radial(stress(u_psi(psi))(r=1))) = 0")
     problem.add_equation("psi(r=1) = 0")
     problem.add_equation("integ(psi) = 0")
     solver = problem.build_solver(ncc_cutoff=1e-6)
     sp = solver.subproblems_by_group[(m, None)]
     
     # Solve
+    logger.info("Initiating solve")
     solver.solve_dense(sp)
     
-    # Sort results
-    idxs = np.abs(solver.eigenvalues).argsort()[::-1]
-    evals = solver.eigenvalues[idxs]
-    evecs = solver.eigenvectors[:,idxs]
-    # throw out inf evals/evecs, if any
-    evecs = evecs[:,np.logical_not(np.isinf(evals))]
-    evals = evals[np.logical_not(np.isinf(evals))]
+    evals = solver.eigenvalues
     
-    return evals, evecs
+    # Save fields
+    logger.info("Saving results")
+    psi_evecs = []
+    vort_evecs = []
+    if save_psi or save_vort:   
+        for idx in range(evals.shape[0]):
+            if idx % 25 == 0:
+                logger.info("idx=%d, out of=%d" %(idx+1, evals.shape[0]))
+            solver.set_state(idx, sp.subsystems[0])
+            if save_psi:    
+                psi.change_scales(dealias)
+                psi_evecs.append(np.copy(psi['g']))
+            if save_vort:
+                vort = d3.lap(psi).evaluate()
+                vort.change_scales(dealias)
+                vort_evecs.append(np.copy(vort['g'])) 
+    
+        if save_psi and save_vort:
+            return evals, np.array(psi_evecs), np.array(vort_evecs)
+        elif save_psi:
+            return evals, np.array(psi_evecs)
+        elif save_vort:
+            return evals, np.array(vort_evecs)
+        else:
+            logger.info("This should never happen")
+    else:
+        logger.info("Returning evals")
+        return evals
 
 ### Solve EVPs and retain well-resolved modes###
 dtype = np.complex128
 dealias = 3/2
 Nphi_lo, Nr_lo = (Nphi, Nr)
 Nphi_hi, Nr_hi = (int(dealias*Nphi), int(dealias*Nr))
+print("lo", Nphi_lo, Nr_lo)
+print("hi", Nphi_hi, Nr_hi)
+if Nphi_hi % 2 != 0:
+    Nphi_hi += 1
+if Nr_hi % 2 != 0:
+    Nr_hi += 1
+print("hi", Nphi_hi, Nr_hi)
 
 if inviscid:
-    params = (m, gamma)
+    params = (m, gamma, save_psi, save_vort)
+    params_hi = (m, gamma, False, False)
 else:
-    params = (m, gamma, alpha, nu)
+    params = (m, gamma, alpha, nu, save_psi, save_vort)
+    params_hi = (m, gamma, alpha, nu, False, False)
 
 # Solve at nominal resolution
-evals_lo, evecs_lo = evp_dense(Nphi_lo, Nr_lo, file_str, inviscid, params)
+logger.info("Entering solve at nominal resolution")
+if save_psi and save_vort:
+    evals_lo, psi_evecs_lo, vort_evecs_lo = evp_dense(Nphi_lo, Nr_lo, file_str, inviscid, params)
+elif save_psi:
+    evals_lo, psi_evecs_lo, = evp_dense(Nphi_lo, Nr_lo, file_str, inviscid, params)
+elif save_vort:
+    evals_lo, vort_evecs_lo = evp_dense(Nphi_lo, Nr_lo, file_str, inviscid, params)
+else:
+    evals_lo = evp_dense(Nphi_lo, Nr_lo, file_str, inviscid, params)
+
 # Solve at higher resolution
-evals_hi, evecs_hi = evp_dense(Nphi_hi, Nr_hi, file_str, inviscid, params)
+logger.info("Entering solve at higher resolution")
+evals_hi = evp_dense(Nphi_hi, Nr_hi, file_str, inviscid, params_hi)
 
 # Accept/reject
-evals_resolved, evals_unresolved, idxs_resolved, idxs_unresolved = separate_resolved(evals_lo, evals_hi)
+drift_thresh = 1e3
+imag_thresh = np.max((alpha * 3e2, 1e0))
+thresh_opts = (drift_thresh, imag_thresh)
+logger.info("Entering accept/reject procedure")
+
+evals_lo_res, evals_lo_bad, indx_lo_res, indx_lo_bad, inverse_drift_res, inverse_drift_bad = separate_resolved(evals_lo, evals_hi, thresh_opts)
+if save_psi:
+    psi_evecs_lo_res = psi_evecs_lo[indx_lo_res, :]
+    psi_evecs_lo_bad = psi_evecs_lo[indx_lo_bad, :]
+if save_vort:
+    vort_evecs_lo_res = vort_evecs_lo[indx_lo_res, :]
+    vort_evecs_lo_bad = vort_evecs_lo[indx_lo_bad, :]
 
 # Save end results
+logger.info("Saving results as " + output_prefix + '_' + output_suffix + '.npy')
 processed = {}
-processed['evals_resolved'] = evals_resolved
-processed['evecs_resolved'] = evecs_lo[:, idxs_resolved]
-processed['evals_unresolved'] = evals_unresolved
-processed['evecs_unresolved'] = evecs_lo[:, idxs_unresolved]
+processed['evals_res'] = evals_lo_res
+processed['evals_bad'] = evals_lo_bad
+if save_psi:
+    processed['psi_evecs_res'] = psi_evecs_lo_res
+    processed['psi_evecs_bad'] = psi_evecs_lo_bad
+if save_vort:
+    processed['vort_evecs_res'] = vort_evecs_lo_res
+    processed['vort_evecs_bad'] = vort_evecs_lo_bad
+processed['drifts_res'] = inverse_drift_res
+processed['drifts_bad'] = inverse_drift_bad
+
+
 np.save(output_prefix + '_' + output_suffix + '.npy', processed)
