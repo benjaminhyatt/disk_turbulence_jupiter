@@ -39,7 +39,7 @@ scalars_dt = 0.01
 dx = 1 / N                          # Grid spacing
 U = epsilon**(1/3) * L_fric**(1/3)  # Friction velocity
 safety = 0.5                        # CFL safety factor: 0.25 for SBDF2
-max_dt = 10*safety * dx / U            # Timestep
+max_dt = safety * dx / U            # Timestep
 
 # Derived parameters
 eta = epsilon * ellf**2  # Enstrophy injection rate
@@ -129,12 +129,11 @@ CFL = d3.CFL(solver, initial_dt=0.1*max_dt, cadence=1, safety=safety, max_change
 CFL.add_velocity(u)
 
 # Initial condition
-w_init = dist.Field(name='w_init', bases=full_basis)
 def set_initial_condition(ke_tot):
     """Initialize a field with random vorticity data of a given norm."""
     psi['c'][m_slice, ell_slice] = draw_gaussian_random_field()
-    w_init['c'][m_slice, ell_slice] = draw_gaussian_random_field()
-    ke_init = ave(-0.5*psi*w_init).evaluate()
+    w_init = -d3.lap(psi)
+    ke_init = ave(0.5*psi*w_init).evaluate()
     if rank == 0:
         data = [4 * np.pi * ke_init['g'][0][0]]*size
     else:
