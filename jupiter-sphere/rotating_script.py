@@ -43,7 +43,7 @@ scalars_dt = 0.01
 dx = 1 / Ntheta                          # Grid spacing
 U = epsilon**(1/3) * L_fric**(1/3)  # Friction velocity
 safety = 0.25                        # CFL safety factor: 0.25 for SBDF2
-max_dt = 10*safety * dx / U            # Timestep
+max_dt = safety * dx / U            # Timestep
 
 # Derived parameters
 eta = epsilon * ellf**2  # Enstrophy injection rate
