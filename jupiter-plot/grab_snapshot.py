@@ -85,6 +85,9 @@ vort = dist.Field(name = 'vort', bases = disk)
 u.load_from_hdf5(f, wout)
 vort.load_from_hdf5(f, wout)
 
+# optional: if doing this to look at plot on finer grid
+vort.change_scales(3) 
+
 ug = np.copy(u['g'])
 uc = np.copy(u['c'])
 vortg = np.copy(vort['g'])
@@ -104,3 +107,4 @@ grab['vortc'] = vortc
 
 print('saving data grab as: ' + 'grab_' + str(wout) + '_' + output_suffix + '.npy')
 np.save('grab_' + str(wout) + '_' + output_suffix + '.npy', grab)
+

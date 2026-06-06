@@ -32,7 +32,7 @@ output_prefix = args['--output']
 
 file_str = args['<file>'][0]
 output_suffix = file_str.split('analysis_')[1].split('.')[0].split('/')[0] #[:-1] 
-
+print(output_suffix)
 alpha_str = output_suffix.split('alpha_')[1].split('_')[0]
 gamma_str = output_suffix.split('gam_')[1].split('_')[0]
 eps_str = output_suffix.split('eps_')[1].split('_')[0]
@@ -204,3 +204,4 @@ print("w_rms", w_rms)
 
 print('saving output')
 np.save(output_prefix + '_' + output_suffix + '.npy', processed)
+

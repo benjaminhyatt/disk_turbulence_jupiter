@@ -32,23 +32,32 @@ profiles = eval(args['--profiles'])
 snapshots = eval(args['--snapshots'])
 output_prefix = args['--output']
 
-def get_int(string):
+def get_int(string, ng0):
+    do_push = False
+    if 'gather' in string:
+        do_push = True
     string = string.split('.h5')[0]
     string = string.split('_s')[-1]
     integer = int(string)
+    if do_push:
+        integer += ng0
     return integer
 
 files = args['<files>']
+nfiles = len(files)
+ngather1 = 0
+for n, fn in enumerate(files):
+    if 'gather' in fn:
+        ngather1 += 1
+ngather0 = nfiles - ngather1
 if len(files[0]) == 1:
     files = [files]
     print("only read-in one file name argument - not recommended to use this script in that case")
-files = sorted(files, key=get_int)
-#files[0], files[1] = files[1], files[0]
+files = sorted(files, key=lambda x: get_int(x, ngather0))
 print('')
 print('sorted files:')
 for file_str in files:
     print(file_str)
-nfiles = len(files)
 output_suffix = files[0].split('analysis_')[1][:-1] 
 Nphi = int(output_suffix.split('Nphi_')[1].split('_')[0])
 Nr = int(output_suffix.split('Nr_')[1].split('_')[0])
@@ -247,3 +256,4 @@ with h5py.File(output_prefix + '_' + output_suffix + '.h5', 'w') as f_merge:
                 f_merge['tasks'][task].dims[m].attach_scale(f_merge['scales'][scalename_use])
 
 print("finishing")
+

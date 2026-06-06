@@ -98,7 +98,7 @@ gamma_read = str_to_float(gamma_str)
 eps_read = str_to_float(eps_str)
 nu_read = str_to_float(nu_str)
 alpha_vals = np.array((1e-2, 3.3e-2))
-gamma_vals = np.array((0, 30, 85, 240, 400, 675, 1200, 1920, 2500, 3200))
+gamma_vals = np.array((0, 30, 85, 240, 400, 675, 950, 1200, 1920, 2500, 3200))
 eps_vals = np.array([3.3e-1, 1.0, 2.0])
 nu_vals = np.array([5e-5, 2e-4])
 alpha = alpha_vals[np.argmin(np.abs(alpha_vals - alpha_read))]
@@ -435,9 +435,14 @@ def bins_r(r_g, prec, width, r_idx_outer):
         n_test_per_bin.append(np.sum(np.logical_and(test_pts_global > bin_edges[i], test_pts_global < bin_edges[i + 1])))
     n_test_per_bin = np.array(n_test_per_bin)
     if np.unique(n_test_per_bin).shape[0] > 1:
-        print("The options specified (e.g., precisions and bin widths) resulted in a non-uniform number of test points per bin.")
+        print("The options specified (e.g., precisions and bin widths) resulted in a non-uniform number of test points per bin in r.")
         print("The results will be re-weighted accordingly.")
-    
+        print("")
+        print("shape", r_g_aug.shape, "r_g_aug", r_g_aug)
+        print("shape", n_g * (prec + 1) + 1, test_pts_global.shape, "test_pts_global", test_pts_global)
+        print("shape", n_edges, bin_edges.shape, "bin_edges", bin_edges)
+        print("shape", n_test_per_bin.shape, "n_test_per_bin", n_test_per_bin)
+        print("shape", np.unique(n_test_per_bin).shape, np.unique(n_test_per_bin))
     bin_centers = []
     for i in range(n_edges - 1):
         bin_centers.append(0.5 * (bin_edges[i] + bin_edges[i + 1]))
@@ -456,7 +461,8 @@ def bins_r(r_g, prec, width, r_idx_outer):
 def bins_phi(phi_g, prec, width):
     n_g = phi_g.shape[0]
     test_pts_global = np.linspace(0, 2*np.pi, n_g * (prec + 1), endpoint=False)
-    
+    #print(test_pts_global)   
+ 
     n_edges = int(np.ceil(n_g / width))
     bin_edges_main = []
     for i in range(1, n_edges):
@@ -479,8 +485,9 @@ def bins_phi(phi_g, prec, width):
     n_test_per_bin.append(n_test_0a + n_test_0b)
     n_test_per_bin = np.array(n_test_per_bin)
     if np.unique(n_test_per_bin).shape[0] > 1:
-        print("The options specified (e.g., precisions and bin widths) resulted in a non-uniform number of test points per bin.")
+        print("The options specified (e.g., precisions and bin widths) resulted in a non-uniform number of test points per bin in phi.")
         print("The results will be re-weighted accordingly.")
+        print(n_test_per_bin, np.unique(n_test_per_bin))
 
     bin_centers = []
     for i in range(n_edges - 1):
@@ -500,12 +507,19 @@ rand = np.random.RandomState(seed=10101)
 
 ### specify writes to process ###
 t = f['tasks/KE'].dims[0]['sim_time'][:]
-try:
+#try:
+#    ws = np.arange(np.where(t <= t_out_start)[0][-1], np.where(t >= t_out_end)[0][0] + 1)
+#except:
+#    print("read-in t:", t)
+#    print("specified t_out_start or t_out_end not allowed")
+#    raise
+
+if np.sum(t <= t_out_start) > 0:
     ws = np.arange(np.where(t <= t_out_start)[0][-1], np.where(t >= t_out_end)[0][0] + 1)
-except:
-    print("read-in t:", t)
-    print("specified t_out_start or t_out_end not allowed")
-    raise
+else:
+    ws = np.arange(0, np.where(t >= t_out_end)[0][0] + 1)
+    print("t[0] =", t[0], "didn't satisfy t <= t_out_start, so starting from t[0] instead")
+
 nw = len(ws) # number of writes to process
 tw = t[ws]
 
@@ -668,7 +682,13 @@ hist_phi = np.zeros_like(phi_centers)
 hist_2d = np.zeros_like(phi_centers_2d)
 
 n_hist = 0
-ws_hist = np.arange(np.where(t <= t_hist_start)[0][-1], np.where(t >= t_hist_end)[0][0] + 1)
+
+if np.sum(t <= t_hist_start) > 0:
+    ws_hist = np.arange(np.where(t <= t_hist_start)[0][-1], np.where(t >= t_hist_end)[0][0] + 1)
+else:
+    ws_hist = np.arange(0, np.where(t >= t_hist_end)[0][0] + 1)
+    print("t[0] =", t[0], "didn't satisfy t <= t_out_start, so starting from t[0] instead")
+
 
 for j, w_hist in enumerate(ws_hist):
     if w_hist in ws:
@@ -704,7 +724,7 @@ for j, w_hist in enumerate(ws_hist):
 pdf_r = hist_r / n_hist / drs
 pdf_phi = hist_phi / n_hist / dphis
 r_int = np.pi*(r_outer**2 - r_inner**2)
-phi_int = np.concatenate(((phi_e_main - phi_w_main)/2, [(2*np.pi + phi_e_0a - phi_w_0b)/2]))
+phi_int = np.concatenate(((phi_e_main - phi_w_main)/2, [(phi_w_main[0] + 2*np.pi - phi_e_main[-1])/2]))
 dAs = np.outer(phi_int, r_int)
 pdf_2d = hist_2d / n_hist / dAs
 
@@ -763,7 +783,3 @@ if use_optimize:
 
 print('saving processed results as: ' + output_prefix + '_' + output_suffix + '.npy')
 np.save(output_prefix + '_' + output_suffix + '.npy', processed)
-
-
-
-

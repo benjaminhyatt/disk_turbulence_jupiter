@@ -1,0 +1,349 @@
+"""
+Compute time-averaged, azimuthally-averaged zonal flow diagnostics from an
+HDF5 analysis file:
+
+    U_zonal(r)      = <u_phi>_{phi, t}        (azimuthal mean velocity)
+    omega_zonal(r)  = <vort>_{phi, t}         (azimuthal mean vorticity)
+
+plus their radial gradients dU_zonal/dr and d(omega_zonal)/dr, computed via
+Dedalus on the disk basis for consistency with downstream scripts.
+
+For the force balance, the quantity on the same footing as gamma*r = -d_r(f)
+and d_r(omega_RW) is d_r(omega_zonal). U_zonal is retained as a diagnostic
+(useful for identifying jet structure, etc.), but its radial gradient is NOT
+the right quantity to compare with gamma*r dimensionally.
+
+This is the "Stage 1" naive estimate: both U_zonal and omega_zonal contain the
+CPC's m=0 contribution near r = r_CPC. Outside the CPC's spatial footprint
+(~ rho_window from r_CPC) these are clean estimates of the background zonal
+profile; inside that band they are contaminated and should be interpreted with
+care (or smoothly interpolated across).
+
+Usage:
+    process_zonal_flow_v2.py <hdf5_file> [options]
+
+Arguments:
+    <hdf5_file>             HDF5 analysis file from Dedalus simulation
+
+Options:
+    --tracking_file=<str>   optional processed tracking .npy; if provided, the
+                            plot will overlay r_CPC and a CPC-footprint band
+                            [default: None]
+    --t_start=<float>       sim time to begin averaging [default: 149.]
+    --t_end=<float>         sim time to stop averaging  [default: 251.]
+    --rho_window=<float>    half-width of the CPC-footprint band to shade in
+                            the plot, around r_CPC [default: 0.3]
+    --verify_omega=<bool>   if True, also compute omega_zonal from U_zonal via
+                            (1/r) d_r(r*U) and report the max abs difference
+                            from the directly-loaded vort average [default: True]
+    --output=<str>          output .npy path; 'auto' to use the output_suffix
+                            convention [default: auto]
+    --plot=<str>            plot path; 'auto' to use the output_suffix
+                            convention. Empty string or 'none' to suppress.
+                            [default: auto]
+    --output_prefix=<str>   prefix used when --output / --plot are 'auto'
+                            [default: processed_zonal_flow]
+"""
+
+import numpy as np
+import h5py
+import dedalus.public as d3
+import matplotlib.pyplot as plt
+from docopt import docopt
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+### read options ###
+args = docopt(__doc__)
+print(args)
+
+file_str       = args['<hdf5_file>']
+tracking_arg   = args['--tracking_file']
+t_start        = float(args['--t_start'])
+t_end          = float(args['--t_end'])
+rho_window     = float(args['--rho_window'])
+verify_omega   = eval(args['--verify_omega'])
+output_arg     = args['--output']
+plot_arg       = args['--plot']
+output_prefix  = args['--output_prefix']
+dealias        = 3/2
+
+### filename parsing (same convention as the rest of the pipeline) ###
+def str_to_float(a):
+    first = float(a[0])
+    try:
+        sec = float(a[2])
+    except Exception:
+        sec = 0
+    sgn = 1 if a[-3] == 'p' else -1
+    exp = int(a[-2:])
+    return (first + sec/10) * 10**(sgn * exp)
+
+output_suffix = file_str.split('analysis_')[1].split('.')[0].split('/')[0]
+Nphi       = int(output_suffix.split('Nphi_')[1].split('_')[0])
+Nr         = int(output_suffix.split('Nr_')[1].split('_')[0])
+alpha_read = str_to_float(output_suffix.split('alpha_')[1].split('_')[0])
+gamma_read = str_to_float(output_suffix.split('gam_')[1].split('_')[0])
+eps_read   = str_to_float(output_suffix.split('eps_')[1].split('_')[0])
+nu_read    = str_to_float(output_suffix.split('nu_')[1].split('_')[0])
+
+alpha_vals = np.array((2e-3, 1e-2, 3.3e-2))
+gamma_vals = np.array((0, 30, 85, 240, 400, 675, 920, 950, 1200, 1920,
+                       2372, 2500, 3200))
+eps_vals   = np.array([3.3e-1, 1.0, 2.0])
+nu_vals    = np.array([5e-5, 8/90000, 2e-4])
+alpha = float(alpha_vals[np.argmin(np.abs(alpha_vals - alpha_read))])
+gamma = float(gamma_vals[np.argmin(np.abs(gamma_vals - gamma_read))])
+eps   = float(eps_vals[np.argmin(np.abs(eps_vals - eps_read))])
+nu    = float(nu_vals[np.argmin(np.abs(nu_vals - nu_read))])
+
+print(f"Parsed parameters: Nphi={Nphi}, Nr={Nr}, "
+      f"alpha={alpha}, gamma={gamma}, eps={eps}, nu={nu}")
+
+### resolve output paths ###
+def auto_or(arg, default_template):
+    if arg.lower() == 'auto':
+        return default_template
+    return arg
+
+output_path = auto_or(output_arg, f"{output_prefix}_{output_suffix}.npy")
+if plot_arg.lower() in ('none', '',):
+    plot_path = None
+else:
+    plot_path = auto_or(plot_arg, f"{output_prefix}_{output_suffix}.png")
+print(f"output .npy path: {output_path}")
+print(f"plot path:        {plot_path}")
+
+### Dedalus setup ###
+coords     = d3.PolarCoordinates('phi', 'r')
+dist       = d3.Distributor(coords, dtype=np.float64)
+disk       = d3.DiskBasis(coords, shape=(Nphi, Nr), radius=1,
+                          dealias=dealias, dtype=np.float64)
+phi_deal, r_deal = dist.local_grids(disk, scales=(dealias, dealias))
+phi_1d = phi_deal[:, 0]
+r_1d   = r_deal[0, :]
+Nphi_deal, Nr_deal = len(phi_1d), len(r_1d)
+
+u_field    = dist.VectorField(coords, name='u',    bases=disk)
+vort_field = dist.Field(             name='vort', bases=disk)
+
+er = dist.VectorField(coords, bases=disk)
+er.change_scales(dealias)
+er['g'][1] = 1.0
+
+### open HDF5 and select frames ###
+logger.info("Opening HDF5: " + file_str)
+f = h5py.File(file_str, 'r')
+
+if 'u' not in f['tasks']:
+    raise RuntimeError("HDF5 file does not contain a 'u' velocity task.")
+if 'vort' not in f['tasks']:
+    raise RuntimeError("HDF5 file does not contain a 'vort' task. "
+                       "Without it, the zonal vorticity can't be averaged "
+                       "directly; rerun the simulation with vort saved, or "
+                       "fall back to deriving omega_zonal from U_zonal via "
+                       "(1/r) d_r(r*U).")
+
+t_all = f['tasks/u'].dims[0]['sim_time'][:]
+t_end_eff = min(t_end, float(t_all[-1]))
+if t_start > t_all[-1]:
+    raise ValueError(f"t_start={t_start} beyond last available time {t_all[-1]:.3f}")
+
+ws_start = np.where(t_all <= t_start)[0][-1] if np.any(t_all <= t_start) else 0
+ws_end   = np.where(t_all >= t_end_eff)[0][0]
+ws       = np.arange(ws_start, ws_end + 1)
+nw, tw   = len(ws), t_all[ws]
+print(f"Processing {nw} writes: t={tw[0]:.3f} to t={tw[-1]:.3f}")
+
+### accumulate the m=0 components of u_phi and vort over time ###
+u_phi_m0_sum         = np.zeros(Nr_deal)
+omega_m0_sum         = np.zeros(Nr_deal)
+u_phi_m0_time_series = np.zeros((nw, Nr_deal))
+omega_m0_time_series = np.zeros((nw, Nr_deal))
+
+prog_cad = max(1, nw // 50)
+for i, w in enumerate(ws):
+    if i % prog_cad == 0:
+        print(f"writes loop: i={i} out of {nw}")
+
+    u_field.load_from_hdf5(f, w)
+    u_field.change_scales(dealias)
+    uphi_g = u_field['g'][0]                  # shape (Nphi_deal, Nr_deal)
+    u_phi_m0 = np.mean(uphi_g, axis=0)
+    u_phi_m0_sum += u_phi_m0
+    u_phi_m0_time_series[i, :] = u_phi_m0
+
+    vort_field.load_from_hdf5(f, w)
+    vort_field.change_scales(dealias)
+    vort_g = vort_field['g']                  # shape (Nphi_deal, Nr_deal)
+    omega_m0 = np.mean(vort_g, axis=0)
+    omega_m0_sum += omega_m0
+    omega_m0_time_series[i, :] = omega_m0
+
+f.close()
+U_zonal     = u_phi_m0_sum / nw
+omega_zonal = omega_m0_sum / nw
+
+### compute radial gradients via Dedalus (consistent with downstream scripts) ###
+def radial_gradient_of(profile_1d):
+    """Take a 1D radial profile, embed as a phi-constant 2D field on the disk,
+    take er @ d3.grad, return the result as a 1D radial profile."""
+    fld = dist.Field(bases=disk)
+    fld.change_scales(dealias)
+    fld['g'] = np.broadcast_to(profile_1d[np.newaxis, :],
+                               (Nphi_deal, Nr_deal)).copy()
+    dr = (er @ d3.grad(fld)).evaluate()
+    dr.change_scales(dealias)
+    return dr['g'][0, :]
+
+dU_zonal_dr        = radial_gradient_of(U_zonal)
+d_omega_zonal_dr   = radial_gradient_of(omega_zonal)
+
+### optional verification: omega_zonal should equal (1/r) d_r(r*U_zonal) ###
+omega_from_U = None
+omega_diff_max = None
+if verify_omega:
+    # (1/r) d_r(r*U) is the m=0 vorticity for a purely azimuthal background
+    rU = r_1d * U_zonal
+    d_rU_dr = radial_gradient_of(rU)
+    # avoid division by zero at r=0
+    safe = r_1d > 0
+    omega_from_U = np.zeros_like(omega_zonal)
+    omega_from_U[safe] = d_rU_dr[safe] / r_1d[safe]
+    # restrict comparison to r where the formula is well-defined and meaningful
+    cmp_mask = r_1d > 0.02
+    omega_diff_max = float(np.max(np.abs(omega_zonal[cmp_mask]
+                                         - omega_from_U[cmp_mask])))
+    omega_norm = float(np.max(np.abs(omega_zonal[cmp_mask])) + 1e-30)
+    print(f"\nVerification: max|omega_zonal_direct - omega_from_U|/max|omega| "
+          f"(r > 0.02) = {omega_diff_max/omega_norm:.3e}")
+    print("  (should be small if the m=0 of u_r is approximately zero; "
+          "a large value would suggest a persistent radial mean flow or "
+          "numerical inconsistency.)")
+
+### optional: load tracking file to get r_CPC for overlays ###
+r_CPC = None
+if tracking_arg not in ('None', 'none', None):
+    logger.info("Loading tracking file: " + tracking_arg)
+    tracking = np.load(tracking_arg, allow_pickle=True)[()]
+    r_locs       = np.array(tracking['r_locs'],   dtype=float)
+    glitch_flags = np.array(tracking.get('glitch_flags',
+                                         np.zeros_like(r_locs)), dtype=bool)
+    r_clean      = r_locs[~glitch_flags]
+    if len(r_clean) > 0:
+        r_CPC = float(np.mean(r_clean))
+        print(f"r_CPC from tracking file: {r_CPC:.4f}")
+
+### diagnostic prints: the comparison that matters ###
+print(f"\n{'r':>8}  {'omega_zonal':>14}  {'d_r(omega_zonal)':>18}  "
+      f"{'gamma*r':>12}  {'ratio':>10}")
+print('-' * 75)
+step = max(1, Nr_deal // 30)
+for ri in range(0, Nr_deal, step):
+    rval = r_1d[ri]
+    if rval < 1e-3:
+        continue
+    ratio = abs(d_omega_zonal_dr[ri]) / (gamma * rval + 1e-30)
+    marker = ''
+    if r_CPC is not None and abs(rval - r_CPC) < 2 * (r_1d[1] - r_1d[0]):
+        marker = '  <-- r_CPC (contaminated by CPC)'
+    print(f"{rval:>8.4f}  {omega_zonal[ri]:>14.4e}  "
+          f"{d_omega_zonal_dr[ri]:>18.4e}  "
+          f"{gamma * rval:>12.4e}  {ratio:>10.4f}{marker}")
+
+### save ###
+processed = {
+    'r_1d'                  : r_1d,
+    'phi_1d'                : phi_1d,
+    # primary outputs
+    'U_zonal'               : U_zonal,
+    'dU_zonal_dr'           : dU_zonal_dr,
+    'omega_zonal'           : omega_zonal,
+    'd_omega_zonal_dr'      : d_omega_zonal_dr,
+    # time series (for diagnostic plots / convergence checks)
+    'u_phi_m0_time_series'  : u_phi_m0_time_series,
+    'omega_m0_time_series'  : omega_m0_time_series,
+    'tw'                    : tw,
+    # metadata
+    'gamma'                 : gamma,
+    'alpha'                 : alpha,
+    'eps'                   : eps,
+    'nu'                    : nu,
+    'Nphi'                  : Nphi,
+    'Nr'                    : Nr,
+    'output_suffix'         : output_suffix,
+    'r_CPC'                 : r_CPC,
+    'rho_window'            : rho_window,
+}
+if verify_omega:
+    processed['omega_from_U']      = omega_from_U
+    processed['omega_diff_max']    = omega_diff_max
+np.save(output_path, processed)
+print(f"\nSaved: {output_path}")
+
+### plot ###
+if plot_path is not None:
+    fig, axes = plt.subplots(3, 1, figsize=(9, 11), constrained_layout=True,
+                              sharex=True)
+
+    # panel 1: U_zonal(r)  [diagnostic — jet structure]
+    ax = axes[0]
+    ax.plot(r_1d, U_zonal, color='C0', lw=1.5, label=r'$U_{\rm zonal}(r)$')
+    ax.axhline(0, color='gray', lw=0.5)
+    if r_CPC is not None:
+        ax.axvline(r_CPC, color='k', ls='--', lw=1.0,
+                   label=f'$r_{{\\rm CPC}}={r_CPC:.4f}$')
+        ax.axvspan(max(0, r_CPC - rho_window), r_CPC + rho_window,
+                   color='gray', alpha=0.15,
+                   label=f'CPC footprint $\\pm{rho_window:.2f}$')
+    ax.set_ylabel(r'$U_{\rm zonal}(r) = \langle u_\phi\rangle_{\phi,t}$')
+    ax.set_title(f'Zonal mean velocity — $\\gamma={gamma:.0f}$, '
+                 f'$t\\in[{tw[0]:.1f}, {tw[-1]:.1f}]$, {nw} frames'
+                 '  [diagnostic; not the right quantity for the force balance]')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim([0, 1])
+
+    # panel 2: omega_zonal(r)
+    ax = axes[1]
+    ax.plot(r_1d, omega_zonal, color='C2', lw=1.5,
+            label=r'$\omega_{\rm zonal}(r)$')
+    if verify_omega and omega_from_U is not None:
+        ax.plot(r_1d, omega_from_U, color='C2', lw=0.8, ls=':',
+                label=r'$(1/r)\,\partial_r(r\,U_{\rm zonal})$')
+    ax.axhline(0, color='gray', lw=0.5)
+    if r_CPC is not None:
+        ax.axvline(r_CPC, color='k', ls='--', lw=1.0,
+                   label=f'$r_{{\\rm CPC}}={r_CPC:.4f}$')
+        ax.axvspan(max(0, r_CPC - rho_window), r_CPC + rho_window,
+                   color='gray', alpha=0.15)
+    ax.set_ylabel(r'$\omega_{\rm zonal}(r) = \langle\omega\rangle_{\phi,t}$')
+    ax.set_title('Zonal mean vorticity')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    # panel 3: d/dr(omega_zonal) vs +/- gamma*r  [the comparison that matters]
+    ax = axes[2]
+    ax.plot(r_1d, d_omega_zonal_dr, color='C3', lw=1.5,
+            label=r'$\partial_r \omega_{\rm zonal}$')
+    ax.plot(r_1d,  gamma * r_1d, color='C0', lw=1.0, ls=':',
+            label=r'$+\gamma r$')
+    ax.plot(r_1d, -gamma * r_1d, color='C0', lw=1.0, ls=':',
+            label=r'$-\gamma r$')
+    ax.axhline(0, color='gray', lw=0.5)
+    if r_CPC is not None:
+        ax.axvline(r_CPC, color='k', ls='--', lw=1.0,
+                   label=f'$r_{{\\rm CPC}}={r_CPC:.4f}$')
+        ax.axvspan(max(0, r_CPC - rho_window), r_CPC + rho_window,
+                   color='gray', alpha=0.15)
+    ax.set_xlabel(r'$r$')
+    ax.set_ylabel(r'radial gradient')
+    ax.set_title(r'Zonal-vorticity gradient vs $\pm\gamma r$  '
+                 r'[the force-balance comparison]')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    fig.savefig(plot_path, dpi=150)
+    plt.close(fig)
+    print(f"Figure saved: {plot_path}")

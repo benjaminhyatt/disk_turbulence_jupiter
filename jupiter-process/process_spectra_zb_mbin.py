@@ -68,7 +68,7 @@ alpha_vals = np.array((1e-2, 3.3e-2))
 gamma_vals = np.array((0, 30, 85, 240, 400, 675, 1200, 1920, 2372, 2500, 3200))
 eps_vals = np.array([1.0, 2.0])
 nu_vals = np.array([2e-4, 8/90000, 8e-5, 4e-5, 2e-5])
-kf_vals = np.array((10, 20, 30, 40, 80))
+kf_vals = np.array((10, 15, 20))
 
 alpha = alpha_vals[np.argmin(np.abs(alpha_vals - alpha_read))]
 gamma = gamma_vals[np.argmin(np.abs(gamma_vals - gamma_read))]
@@ -322,16 +322,10 @@ phi_deal, r_deal = dist.local_grids(disk, scales=(dealias, dealias))
 
 u = dist.VectorField(coords, name = 'u', bases = disk) # velocity
 vort = dist.Field(name = 'vort', bases = disk) # scalar vertical vorticity
-#uphi = dist.Field(name = 'uphi', bases = disk) # azimuthal component of velocity
-#ur = dist.Field(name = 'ur', bases = disk) # radial component of velocity
 
 # fields to solve for psi
 if not dini:
-    uphi = dist.Field(name = 'uphi', bases = disk) # azimuthal component of velocity
     psi = dist.Field(name = 'psi', bases = disk) # streamfunction
-    rscal = dist.Field(bases=disk)
-    rscal.change_scales(dealias)
-    rscal['g'] = r_deal
     tau_psi = dist.Field(name='tau_psi', bases=edge)
     lift = lambda A: d3.Lift(A, disk, -1)
     tau_psi2 = dist.Field(name='tau_psi2')
@@ -385,8 +379,6 @@ tw = t[ws] # w = 0 corresponds to t = 0
 # Zernike coefficients
 vortZ = np.zeros((nw, Nphi, Nr))
 if dini:
-    #uphiZ = np.zeros((nw, Nphi, Nr))
-    #urZ = np.zeros((nw, Nphi, Nr))
     upZ = np.zeros((nw, Nphi, Nr))
     umZ = np.zeros((nw, Nphi, Nr))
 else:
@@ -395,8 +387,6 @@ else:
 # Bessel coefficients
 vortB = np.zeros((nw, Nphi, Nr))
 if dini:
-    #uphiB = np.zeros((nw, Nphi, Nr))
-    #urB = np.zeros((nw, Nphi, Nr))
     upB = np.zeros((nw, Nphi, Nr))
     umB = np.zeros((nw, Nphi, Nr))
 else:
@@ -437,25 +427,12 @@ for i, w in enumerate(ws):
     u.load_from_hdf5(f, w)
     vort.load_from_hdf5(f, w)
 
-    #if dini:
-    #    u.change_scales(dealias)
-    #    uphi.change_scales(dealias)
-    #    ur.change_scales(dealias)
-    #    uphi['g'] = np.copy(u['g'][0, :, :])
-    #    ur['g'] = np.copy(u['g'][1, :, :])
-    #    uphi.change_scales(1)
-    #    ur.change_scales(1)
-
     # Solve for psi if needed
     if not dini:
-        u.change_scales(dealias)
-        uphi.change_scales(dealias)
-        uphi['g'] = np.copy(u['g'][0, :, :])
-        ruphi = rscal * uphi
         problem = d3.LBVP([psi, tau_psi, tau_psi2], namespace=locals())
         problem.add_equation("lap(psi) + lift(tau_psi) + tau_psi2 = vort")
         problem.add_equation("psi(r=1) = 0")
-        problem.add_equation("integ(psi) = -0.5 * integ(ruphi)")
+        problem.add_equation("integ(psi) = 0")
         solver = problem.build_solver()
         solver.solve()
                 
@@ -466,17 +443,10 @@ for i, w in enumerate(ws):
     
     if dini:
         u.change_scales(1)
-        #uphiZgather = comm.gather(np.copy(u['c'][0, :, :])) # this is technically a misnomer... 
-        #urZgather = comm.gather(np.copy(u['c'][1, :, :]))
         upZgather = comm.gather(np.copy(u['c'][0, :, :]))
         umZgather = comm.gather(np.copy(u['c'][1, :, :]))
         upZ[i, :, :] = np.array(upZgather).reshape(Nphi, Nr)
         umZ[i, :, :] = np.array(umZgather).reshape(Nphi, Nr)
-
-        #uphiZgather = comm.gather(np.copy(uphi['c']))
-        #urZgather = comm.gather(np.copy(ur['c']))
-        #uphiZ[i, :, :] = np.array(uphiZgather).reshape(Nphi, Nr)
-        #urZ[i, :, :] = np.array(urZgather).reshape(Nphi, Nr)
 
     else:
        psi.change_scales(1)
@@ -497,17 +467,12 @@ for i, w in enumerate(ws):
             vortB[i, midxs, :] = (ZB @ vortZ[i, midxs, :][0, :]).reshape(1, Nr)
 
             if dini:
-                #uphiB[i, midxc, :] = (ZB @ uphiZ[i, midxc, :][0, :]).reshape(1, Nr)
-                #uphiB[i, midxs, :] = (ZB @ uphiZ[i, midxs, :][0, :]).reshape(1, Nr)
-                #urB[i, midxc, :] = (ZB @ urZ[i, midxc, :][0, :]).reshape(1, Nr)
-                #urB[i, midxs, :] = (ZB @ urZ[i, midxs, :][0, :]).reshape(1, Nr)
                 upB[i, midxc, :] = (ZB @ upZ[i, midxc, :][0, :]).reshape(1, Nr)
                 upB[i, midxs, :] = (ZB @ upZ[i, midxs, :][0, :]).reshape(1, Nr)
                 umB[i, midxc, :] = (ZB @ umZ[i, midxc, :][0, :]).reshape(1, Nr)
                 umB[i, midxs, :] = (ZB @ umZ[i, midxs, :][0, :]).reshape(1, Nr)
 
                 # 2d volume-integrated coefficients
-                #keB[i, m, :] = ke_m_dini(m, Nr, uphiB[i, midxc, :], uphiB[i, midxs, :], urB[i, midxc, :], urB[i, midxs, :], dini_zs)
                 keB[i, m, :] = ke_m_dini(m, Nr, upB[i, midxc, :], upB[i, midxs, :], umB[i, midxc, :], umB[i, midxs, :], dini_zs)
                 enB[i, m, :] = en_m_dini(m, Nr, vortB[i, midxc, :], vortB[i, midxs, :], dini_zs)
 
@@ -522,8 +487,6 @@ for i, w in enumerate(ws):
         for m in range(mmax + 1):
             # individual m, but arranged in same way
             keBmn[i, m, :] = bin_spectra(keB[i, :, :], bin_widths, Nbins, masks_m[m], None)
-            if m < 3:
-                print(keBmn[i, m, :])
             enBmn[i, m, :] = bin_spectra(enB[i, :, :], bin_widths, Nbins, masks_m[m], None)
 
         # spectra (summed over m, and normalized by bin widths)
@@ -550,10 +513,6 @@ if rank == 0:
         processed['vortZ'] = vortZ
         processed['vortB'] = vortB
         if dini:
-            #processed['uphiZ'] = uphiZ
-            #processed['urZ'] = urZ
-            #processed['uphiB'] = uphiB
-            #processed['urB'] = urB
             processed['upZ'] = upZ
             processed['umZ'] = umZ
             processed['upB'] = upB
@@ -608,10 +567,12 @@ if rank == 0:
         processed['keBmn_tavg'] = keBmn_tavg
         processed['enBmn_tavg'] = enBmn_tavg
 
+        # for possible convenience... (I think we should be able to confirm the relationship here between one and the other and keBmn_tavg above)
+        processed['psiB_tavg'] = np.mean(psiB[tavg_start_idx:tavg_end_idx, :, :], axis = 0)
+        processed['psiB0n_tavg'] = np.sqrt( keBmn_tavg[0, :] / ( np.pi * (std_zs[0, :])**2 * std_weights(0, std_zs[0, :]) ) )
+
     logger.info("Saving on rank %d" %(rank))
     logger.info("Name: " + output_prefix + '_' + output_suffix + '.npy')
     np.save(output_prefix + '_' + output_suffix + '.npy', processed)
 else:
     logger.info("Rank %d is done" %(rank))
-
-

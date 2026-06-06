@@ -39,15 +39,17 @@ def main(filename, start, count, output, args):
 
     plotpvort, plottracking, plotcircle, plotradius, plotsymlog, thresh = args
 
-    if plotpvort:
-        tasks = ['vort', 'pvort']
-    else:
-        tasks = ['vort']
+    #if plotpvort:
+    #    tasks = ['vort', 'pvort']
+    #else:
+    #    tasks = ['vort']
+
+    tasks = ['vortm1_f']
 
     cmap = 'RdBu_r'
     savename_func = lambda write: 'write_{:06}.png'.format(write)
     title_func = lambda sim_time: 't = {:.7f}'.format(sim_time)
-    dpi = 800 #400 #600 #200
+    dpi = 300 #800 #400 #600 #200
     func = lambda phi, r, data: (r*np.cos(phi), r*np.sin(phi), data)
 
     # Layout

@@ -120,17 +120,15 @@ def separate_resolved(evals_N_lo, evals_N_hi, thresh_opts):
 
     drift_pass = inverse_drift > drift_thresh
     drift_fail = inverse_drift <= drift_thresh
-    imag_pass = eval_lo_sorted.imag <= imag_pass
+    imag_pass = eval_lo_sorted.imag <= imag_thresh
 
-    make_execption = eval_lo_sorted.imag < imag_thresh
-
-    eval_lo_and_indx_res = eval_lo_and_indx[np.where(np.logical_or(drift_pass, imag_pass)]
+    eval_lo_and_indx_res = eval_lo_and_indx[np.where(np.logical_or(drift_pass, imag_pass))]
     eval_lo_and_indx_bad = eval_lo_and_indx[np.where(drift_fail)]
     eval_lo_res = eval_lo_and_indx_res[:, 0]
     eval_lo_bad = eval_lo_and_indx_bad[:, 0]
     indx_res = eval_lo_and_indx_res[:, 1].real.astype(int)
     indx_bad = eval_lo_and_indx_bad[:, 1].real.astype(int)
-    drifts_res = inverse_drift[np.where(np.logical_or(drift_pass, imag_pass)]    
+    drifts_res = inverse_drift[np.where(np.logical_or(drift_pass, imag_pass))]    
     drifts_bad = inverse_drift[np.where(drift_fail)]
 
     return eval_lo_res, eval_lo_bad, indx_res, indx_bad, drifts_res, drifts_bad

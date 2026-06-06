@@ -47,7 +47,7 @@ def m_map(m, Nphi, flag):
 #def projdot(a, b):
 #    return (np.dot(a, b) / np.dot(b, b)) #* b
 def projdot(a, b_re, b_im):
-    num = np.dot(a, b_re) # Re(a @ b) = Re(a @ conj(b)) --- a being real here
+    num = np.dot(a, b_re) # Re(a @ b) = Re(a @ conj(b))
     den = np.dot(b_re, b_re) + np.dot(b_im, b_im) # b @ conj(b)
     return num/den
 
@@ -179,6 +179,13 @@ if include_all:
     idxs_include = np.arange(0, len(evals_sorted))
 nidxs = len(idxs_include)
 
+vort_m_c_re_track = np.zeros((nidxs, nw))
+vort_m_s_re_track = np.zeros((nidxs, nw))
+vort_m_c_im_track = np.zeros((nidxs, nw))
+vort_m_s_im_track = np.zeros((nidxs, nw))
+
+projdot_c_track = np.zeros((nidxs, nw))
+projdot_s_track = np.zeros((nidxs, nw))
 projdot_track = np.zeros((nidxs, nw))
 projdot_stats = np.zeros((nidxs, 2))
 
@@ -214,8 +221,14 @@ for i, idx in enumerate(idxs_include):
         vort_evec_m_s_re = vort_evec['c'][m_idx_co_plus, :].imag - vort_evec['c'][m_idx_co_minus, :].imag
         vort_evec_m_c_im = vort_evec['c'][m_idx_co_plus, :].imag + vort_evec['c'][m_idx_co_minus, :].imag
         vort_evec_m_s_im = - vort_evec['c'][m_idx_co_plus, :].real + vort_evec['c'][m_idx_co_minus, :].real
+        vort_m_c_re_track[i, j] = np.sqrt(np.dot(vort_evec_m_c_re, vort_evec_m_c_re))
+        vort_m_s_re_track[i, j] = np.sqrt(np.dot(vort_evec_m_s_re, vort_evec_m_s_re))
+        vort_m_c_im_track[i, j] = np.sqrt(np.dot(vort_evec_m_c_im, vort_evec_m_c_im))
+        vort_m_s_im_track[i, j] = np.sqrt(np.dot(vort_evec_m_s_im, vort_evec_m_s_im))
         projdot_c = projdot(vort['c'][m_idx_re_c, :], vort_evec_m_c_re, vort_evec_m_c_im)
         projdot_s = projdot(vort['c'][m_idx_re_s, :], vort_evec_m_s_re, vort_evec_m_s_im)
+        projdot_c_track[i, j] = 0.5*projdot_c
+        projdot_s_track[i, j] = 0.5*projdot_s
         projdot_track[i, j] = 0.5*(projdot_c + projdot_s) # 0.5 comes from integrating cos^2 and sin^2 = 1/2 +/- cos(2*...)
 
         # projects via l2 inner product in d3
@@ -247,6 +260,14 @@ processed['evals_re'] = evals_sorted.real
 processed['evals_im'] = evals_sorted.imag
 processed['drifts'] = drifts_sorted
 
+processed['vort_m_c_re_track'] = vort_m_c_re_track
+processed['vort_m_s_re_track'] = vort_m_s_re_track
+processed['vort_m_c_im_track'] = vort_m_c_im_track
+processed['vort_m_s_im_track'] = vort_m_s_im_track
+
+
+processed['projdot_c'] = projdot_c_track
+processed['projdot_s'] = projdot_s_track
 processed['projdot'] = projdot_track ### should be equivalent to projl2 below
 processed['projdot_stats'] = projdot_stats
 processed['projl2'] = projl2_track ### (vort_ivp_co, vort_evec) / ||vort_evec||^2

@@ -1,4 +1,3 @@
-
 import numpy as np
 np.seterr(over="raise")
 import dedalus.public as d3
@@ -11,7 +10,6 @@ rank = MPI.COMM_WORLD.rank
 size = MPI.COMM_WORLD.Get_size()
 
 # Domain parameters
-N = 2048 # og 256
 mesh = None
 dtype = np.float64
 dealias = 3 / 2
@@ -28,33 +26,30 @@ ellf  = 256     # Forcing wavenumber (max: Ntheta - 1)
 seed = None     # Random seed
 
 #Problem parameters
-L_diss = 1 / Ntheta # Dissipation scale
-L_fric = 1      # Friction scale
+L_diss = 2 / Ntheta # Dissipation scale
+L_fric = 1e3 # Friction scale
 
-# Solver parameters
-timestepper = d3.SBDF2
-stop_sim_time = 500
-
-# Analysis parameters
-snapshots_dt = 0.1
+# Output parameters
+checkpoints_dt = 0.5
+snapshots_dt = 0.025
 scalars_dt = 0.01
 
 # Timestepping parameters
 dx = 1 / Ntheta                          # Grid spacing
 U = epsilon**(1/3) * L_fric**(1/3)  # Friction velocity
 safety = 0.25                        # CFL safety factor: 0.25 for SBDF2
-max_dt = 10*safety * dx / U            # Timestep
+max_dt = safety * dx / U            # Timestep
 
 # Derived parameters
 eta = epsilon * ellf**2  # Enstrophy injection rate
 nu = L_diss**2 * eta**(1/3)                 # Viscosity
-alpha = 1/30 #epsilon**(1/3) * L_fric**(-2/3)     # Friction
+alpha = epsilon**(1/3) * L_fric**(-2/3)     # Friction
 logger.info(eta)
 logger.info(nu)
 # for hyperdiffusion = additional laplacia, 
 # nu must be scaled
 nu_scaled = nu / (1/L_diss)**2
-print(nu, nu_scaled)
+logger.info("nu = %e, nu_scaled = %e" %(nu, nu_scaled))
 
 # Domain
 coords = d3.S2Coordinates('phi', 'theta')
@@ -68,8 +63,8 @@ c = dist.Field(name='c')
 #for random forcing, let psi equal random number and remove forcing term
 
 # Substitutions
-u = -d3.skew(d3.grad(psi))  # velocity vector: [dy(psi), -dx(psi)]
-w = -d3.lap(psi)            # vorticity: dx(uy) - dy(ux)
+u = -d3.skew(d3.grad(psi))  # velocity vector: (1/sin(theta))*dphi(psi) e_theta - dtheta(psi) e_phi
+w = -d3.lap(psi)            # vorticity: (1/sin(theta)) * (dtheta(sin(theta)*uphi) - dphi(utheta)) = -( (1/sin(theta))*dtheta(sin(theta)*dtheta(psi)) + (1/sin^2(theta))*dphi^2(psi) ) = -lap(psi)
 e = (u@u) / 2               # energy density
 z = (w*w) / 2               # enstrophy density
 zcross = lambda A: d3.MulCosine(d3.skew(A))
@@ -106,33 +101,37 @@ def set_vorticity_forcing(timestep):
 
 # Problem
 problem = d3.IVP([psi, c], namespace=locals())
-#curl of coriolis force = -2*omega*sin(theta)*u_theta
-problem.add_equation("dt(w) + nu_scaled*lap(lap(w)) - 2*Omega*div(MulCosine(u)) + alpha*w + c = -u@grad(w) + Fw")
+#rho component of curl of coriolis force = 2*Omega*div(cos(theta)*u), for rotation vector vec(f) = 2*Omega*e_z
+problem.add_equation("dt(w) + nu_scaled*lap(lap(w)) + 2*Omega*div(MulCosine(u)) + alpha*w + c = -u@grad(w) + Fw")
 problem.add_equation("ave(psi) = 0")
 
 # Solver
 timestepper = d3.SBDF2 #SBDF2
+stop_sim_time = 5/alpha
 solver = problem.build_solver(timestepper)
 solver.stop_sim_time = stop_sim_time
 
+#restart = True #False # set to False when not starting from t=0
+#write, initial_timestep = solver.load_state('snapshots/snapshots_s46.h5', allow_missing=True)
+#write, initial_timestep = solver.load_state('snapshots/snapshots_s158.h5', allow_missing=True)
 
-#modifying timestepping
-#write, initial_timestep = solver.load_state('snapshots/snapshots_s20.h5')
-# initial_timestep = 2e-2
-#initialize from some point in time
-#f = h5py.File('snapshots/snapshots_s1000.h5')
-#psi.load_from_hdf5(f, -1)
-#initial_timestep = f['scales/timestep'][-1]
-#solver.sim_time = f['scales/sim_time'][-1]
-#f.close()
+restart = False
+
+# Overwrite any pre-existing analysis folders in this directory unless restarting from a checkpoint -- then append
+if restart:
+    file_handler_mode = 'append'
+else:
+    file_handler_mode = 'overwrite'
+
+# Checkpoints
+checkpoints = solver.evaluator.add_file_handler('checkpoints', sim_dt = checkpoints_dt, max_writes = 1, mode=file_handler_mode)
+checkpoints.add_tasks(solver.state)
 
 # Analysis
-snapshots = solver.evaluator.add_file_handler('snapshots', sim_dt=snapshots_dt, max_writes=1, mode='append')
-snapshots.add_task(psi, name='psi')
+snapshots = solver.evaluator.add_file_handler('snapshots', sim_dt=snapshots_dt, max_writes=10, mode=file_handler_mode)
 snapshots.add_task(w, name='vorticity')
 
-scalars = solver.evaluator.add_file_handler('scalars', sim_dt=scalars_dt, mode='append')
-
+scalars = solver.evaluator.add_file_handler('scalars', sim_dt=scalars_dt, mode=file_handler_mode)
 ave = d3.Average
 scalars.add_task(ave(e), name='E')
 scalars.add_task(ave(z), name='Z')
@@ -146,12 +145,11 @@ CFL = d3.CFL(solver, initial_dt=0.1*max_dt, cadence=1, safety=safety, max_change
 CFL.add_velocity(u)
 
 # Initial condition
-w_init = dist.Field(name='w_init', bases=full_basis)
 def set_initial_condition(ke_tot):
     """Initialize a field with random vorticity data of a given norm."""
     psi['c'][m_slice, ell_slice] = draw_gaussian_random_field()
-    w_init['c'][m_slice, ell_slice] = draw_gaussian_random_field()
-    ke_init = ave(-0.5*psi*w_init).evaluate()
+    w_init = -d3.lap(psi) # consistent with psi
+    ke_init = ave(0.5*psi*w_init).evaluate()
     if rank == 0:
         data = [4 * np.pi * ke_init['g'][0][0]]*size
     else:
@@ -159,8 +157,13 @@ def set_initial_condition(ke_tot):
     ke_init_int = MPI.COMM_WORLD.scatter(data, root=0)
     # Rescale psi to ke_tot
     psi['c'] *= np.sqrt(ke_tot/ke_init_int)  
-ke_goal = 0.5*(epsilon/alpha)
-set_initial_condition(ke_goal)
+
+if restart: # don't reset the initial condition when you are restarting from a checkpoint !
+    logger.info("skipping call to set_initial condition because this is a restart")
+else:
+    ke_goal = 0.5*(epsilon/alpha)
+    logger.info("calling set_initial condition with ke_goal=%e" %(ke_goal))
+    set_initial_condition(ke_goal)
 
 # Main loop
 try:
@@ -169,7 +172,7 @@ try:
         timestep = CFL.compute_timestep()
         set_vorticity_forcing(timestep)
         solver.step(timestep)
-        if (solver.iteration-1) % 5 == 0:
+        if (solver.iteration-1) % 25 == 0:
             logger.info('Iteration=%i, Time=%e, dt=%e' %(solver.iteration, solver.sim_time, timestep))
 except:
     logger.error('Exception raised, triggering end of main loop.')

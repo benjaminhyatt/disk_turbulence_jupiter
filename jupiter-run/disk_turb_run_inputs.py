@@ -30,6 +30,8 @@ Options:
     --restart_eps_0=<bool>      flag that this run starts from a previous checkpoint, but turning the forcing off [default: False]
     --restart_evolved=<bool>    indicate in output names that this run starts from a checkpoint from a different run [default: False]
 
+    --redo=<bool>               flag to indicate that this will start from 0 but is aiming to fill in a lost chunk of data in a run we have the later data for [default: False]
+
     --safety=<float>            CFL safety factor [default: 0.1]
     --timestepper=<string>      Choice of timestepper [default: SBDF2]
 
@@ -99,6 +101,8 @@ timestepper_str = args['--timestepper']
 
 bc_str = args['--bc']
 
+redo = eval(args['--redo'])
+
 output_suffix = 'nu_{:.0e}'.format(nu) + '_gam_{:.1e}'.format(gamma) + '_kf_{:.1e}'.format(k_force) + '_Nphi_{:}'.format(Nphi) + '_Nr_{:}'.format(Nr) 
 output_suffix += '_eps_{:.1e}'.format(eps)
 output_suffix += '_alpha_{:.1e}'.format(alpha)
@@ -109,6 +113,8 @@ output_suffix += '_seed_{:d}'.format(seed_in)
 output_suffix += '_safety_{:.1e}'.format(safety)
 output_suffix += '_timestepper_' + timestepper_str
 output_suffix += '_bc_' + bc_str
+if redo:
+    output_suffix += '_redo_{:d}'.format(redo)
 output_suffix = output_suffix.replace('-','m').replace('+','p').replace('.','d')
 
 # Bases
@@ -282,7 +288,6 @@ elif timestepper_str.upper() == 'RK443':
     timestepper = d3.RK443
 elif timestepper_str.upper() == 'RK222':
     timestepper = d3.RK222
-tstep = 1e-5
 
 # Solver
 logger.info('building solver')
@@ -306,31 +311,43 @@ if restart or restart_evolved or restart_eps_0 or restart_hyst:
 
     if flip:
         u['g'] *= -1.
+ 
+    solver.stop_sim_time = solver.sim_time + 30.1 #+ 10.01
 
 else:
     file_handler_mode = 'overwrite'
-# Analysis
-###analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.1, mode=file_handler_mode)
-###analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.02, mode=file_handler_mode)
+    tstep = 1e-5
 
-#analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.05, mode=file_handler_mode)
-def sched(iteration, wall_time, sim_time, timestep):
-    if sim_time < 3.07:
-        if iteration % 2500 == 0:
-            return True
-        else:
-            return False
-    else:
-        if iteration % 100 == 0:
-            return True
-        else:
-            return False
+if redo:
+    if gamma == 1200:
+        stop_time = 98.01 
+    elif gamma == 1920:
+        stop_time = 106.01 
+    elif gamma == 2500:
+        stop_time = 109.01
+    solver.stop_sim_time = stop_time
 
-if not restart:
-    analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.05, mode=file_handler_mode)
-else:
-    analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, custom_schedule=sched, mode=file_handler_mode)
-#analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.005, mode=file_handler_mode)
+# typical Rossby wave time scale
+rossby_freq_def = lambda k, m, gam: m * gam * k**(-2)
+from scipy.special import jn_zeros
+k01 = jn_zeros(1, 2)[0]
+rossby_freq_est = rossby_freq_def(k01, 1, gamma)
+rossby_period_est = 2*np.pi/rossby_freq_est
+# analysis cadence
+#period_exp = np.floor(np.log10(np.abs(rossby_period_est)))
+#period_round = np.round(rossby_period_est / 10**period_exp, 0) * 10**period_exp
+#sim_dt_choice = np.min((0.05, 0.1 * period_round))
+freq_exp = np.floor(np.log10(np.abs(rossby_freq_est)))
+freq_round = np.round(rossby_freq_est / 10**freq_exp, 0) * 10**freq_exp
+sim_dt_choice = np.min((0.05, 1/freq_round)) # 1/freq_round/2))
+logger.info("Rossby period estimate: %e, analysis cadence: %e" %(rossby_period_est, sim_dt_choice))
+
+#if not restart:
+#    analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt = 0.05, mode=file_handler_mode)
+#else:
+#    analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, custom_schedule=sched, mode=file_handler_mode)
+analysis = solver.evaluator.add_file_handler('analysis_' + output_suffix, sim_dt=sim_dt_choice, mode=file_handler_mode)
+
 
 # scalars
 analysis.add_task(d3.Average(0.5*u@u), name = 'KE')
@@ -401,10 +418,6 @@ flow = d3.GlobalFlowProperty(solver, cadence=10)
 flow.add_property(u@u, name='u2')
 flow.add_property(vort*vort, name = 'w2')
 
-#if gamma != 0:
-#    max_dt_choice = safety * np.min( ( np.sqrt(eps/alpha)/(2*np.pi/Nphi), 1/(gamma/2) ) )
-#else:
-#    max_dt_choice = 1e-4
 max_dt_choice = 1e-4
 logger.info('setting max_dt as %e' %(max_dt_choice))
 CFL = d3.CFL(solver, initial_dt=tstep, cadence=5, safety=safety, threshold=0.05, max_dt=max_dt_choice)

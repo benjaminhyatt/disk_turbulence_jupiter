@@ -56,7 +56,8 @@ def main(filename, start, count, output):
 
     # Plot writes
     f = np.load(filename, allow_pickle = True)[()]
-    r = f['r']
+    #r = f['r']
+    #r = f['r_deal'][0, :]
     um0 = f['um0']
     um0_tavg = f['um0_tavg']
 
@@ -65,46 +66,29 @@ def main(filename, start, count, output):
     eps = 1 # same comment
     output_suffix = filename.split('processed_profiles_')[1]
 
-    progress_cad = np.ceil(count/20)
 
-    #for index in range(start, start+count): 
-    #    if index % progress_cad == 0 and rank == 0:
-    #        frac = (index)/count
-    #        percent = '{:.3}'.format(100*frac)
-    #        print("Rank {:}:".format(rank), percent, "% complete")
+    Nr = 256
+    Nphi = 512
 
-        # profiles of vorticity and potential vorticity
-    #    ax1 = fig.add_axes([left1, bottom1, width1, height1])
-    #    ax1.axhline(0., color = 'gray')
-    #    ax1.plot(r, um0_tavg / normalize, color = 'black', linewidth = 2.25, label = r'$u$ time average')
-    #    ax1.plot(r, um0[index] / normalize, color = 'blue', linewidth = 1.5, label = r'$u$')
-    #    ax1.set_xlabel(r'$r$')
-    #    ax1.set_ylabel(r'$u(r)/\sqrt{\epsilon/\alpha}$')
-    #    ax1.set_xscale('log')
-    #    ax1.legend(loc = 'lower left')
+    import dedalus.public as d3
+    dealias = 3/2 
+    dtype = np.float64
+    coords = d3.PolarCoordinates('phi', 'r')
+    dist = d3.Distributor(coords, dtype=dtype)
+    disk = d3.DiskBasis(coords, shape=(Nphi, Nr), radius=1, dealias=dealias, dtype=dtype)
+    phi_deal, r_deal = dist.local_grids(disk, scales=(dealias, dealias))
 
-        # Add time title
-    #    title = title_func(f['tw'][index])
-    #    title_height = 1 - 0.125 * t_mar
-    #    fig.suptitle(title, x=0.44, y=title_height, ha='left')
-        # Save figure
-    #    savename = savename_func(index)
-    #    savepath = output.joinpath(savename)
-    #    fig.savefig(str(savepath), dpi=dpi)
-    #    fig.clear()
-
-    #plt.close(fig)
+    r = r_deal[0, :]
 
     # Make a plot of just time-averaged profiles 
     if rank == 0:
         fig = plt.figure(figsize = (scale * w_total, scale * h_total))
-        # profiles of vorticity and potential vorticity
         ax1 = fig.add_axes([left1, bottom1, width1, height1])
-        ax1.plot(r, um0_tavg / normalize, color = 'black', linewidth = 2.25)
+        ax1.plot(r, um0_tavg,  color = 'black', linewidth = 2.25)
+        #ax1.plot(r, um0_tavg / normalize, color = 'black', linewidth = 2.25)
         ax1.set_xlabel(r'$r$')
-        ax1.set_ylabel(r'$u(r)/\sqrt{\epsilon/\alpha}$ (time-averaged)')
+        #ax1.set_ylabel(r'$u(r)/\sqrt{\epsilon/\alpha}$ (time-averaged)')
         ax1.set_xscale('log')
-        #ax1.legend(loc = 'lower left')
         # Save figure
         savepath = 'tavg_' + output_suffix + '.png'
         print('saving as', savepath)
@@ -112,22 +96,6 @@ def main(filename, start, count, output):
         fig.clear()
 
         plt.close(fig)
-
-        #fig = plt.figure(figsize = (scale * w_total, scale * h_total))
-        # profiles of vorticity and potential vorticity
-        #ax1 = fig.add_axes([left1, bottom1, width1, height1])
-        #ax1.plot(r, um0_tavg / r, color = 'blue', linewidth = 1.75, label = r'$(u(r)/r)$')
-        #ax1.axhline(eps**(1/3)*kf**(2/3), color = 'purple', linestyle = 'dashed', label = r'$\tau_{\rm ed}^{-1} = \epsilon^{1/3}k_f^{2/3}$')
-        #ax1.axvline(2 * np.pi / kf, color = 'grey', linestyle = 'dashed', label = r'$r = 2\pi/k_f$')
-        #ax1.set_xlabel(r'$r$')
-        #ax1.set_xscale('log')
-        #ax1.legend(loc = 'upper right')
-        ## Save figure
-        #savepath = 'tavg_v2_' + output_suffix + '.png'
-        #print('saving as', savepath)
-        #fig.savefig(str(savepath), dpi=dpi)
-        #fig.clear()
-
 
 if __name__ == "__main__":
 

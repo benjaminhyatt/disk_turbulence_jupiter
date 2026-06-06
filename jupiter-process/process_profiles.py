@@ -61,34 +61,51 @@ Nr = vortm0.shape[1]
 print(Nr)
 Nphi = int(2*Nr)
 
-try: 
-    um0 = np.array(f1['tasks/um0'][:, 0, :])
-except:
-    import dedalus.public as d3
-    dealias = 3/2
-    dtype = np.float64
+#try: 
+#    um0 = np.array(f1['tasks/um0'][:, 0, :])
+#except:
+import dedalus.public as d3
+dealias = 3/2
+dtype = np.float64
 
-    coords = d3.PolarCoordinates('phi', 'r')
-    dist = d3.Distributor(coords, dtype=dtype)
-    disk = d3.DiskBasis(coords, shape=(Nphi, Nr), radius=1, dealias=dealias, dtype=dtype)
-    ephi = dist.VectorField(coords, bases=disk) #Vector ephi
-    ephi['g'][0] = 1 
-    radial_basis = disk.radial_basis
- 
-    u = dist.VectorField(coords, name='u', bases=disk)
-    #um0r = dist.Field(bases=radial_basis)
-    #um0 = np.zeros((nw, Nr))
-    um0 = np.zeros((nw, int(dealias*Nr)))
-    for w in range(nw):
-        u.load_from_hdf5(f1, w)
-        u.change_scales(dealias)
-        uphi = u@ephi
-        um0r = d3.Average(uphi, coords['phi']).evaluate()
-        #um0r.change_scales(1)
-        if w % 10 == 0:
-            print(w, nw)
-        um0[w, :] = np.copy(um0r['g'])
+coords = d3.PolarCoordinates('phi', 'r')
+dist = d3.Distributor(coords, dtype=dtype)
+disk = d3.DiskBasis(coords, shape=(Nphi, Nr), radius=1, dealias=dealias, dtype=dtype)
+phi_deal, r_deal = dist.local_grids(disk, scales=(dealias, dealias))
+ephi = dist.VectorField(coords, bases=disk) #Vector ephi
+ephi['g'][0] = 1 
+rscalar = dist.Field(bases=disk)
+rscalar.change_scales(dealias)
+rscalar['g'] = r_deal
+radial_basis = disk.radial_basis
 
+u = dist.VectorField(coords, name='u', bases=disk)
+Omega = dist.Field(name='Omega', bases=disk)    
+uphi = dist.Field(bases=radial_basis)
+
+um0 = np.zeros((nw, int(dealias*Nr)))
+#Omegam0 = np.zeros((nw, int(dealias*Nr))
+
+for w in range(nw):
+    u.load_from_hdf5(f1, w)
+    
+    #u.change_scales(dealias)
+    #Omega.change_scales(dealias)
+
+    #uphi = u@ephi
+    #um0r = d3.Average(uphi, coords['phi']).evaluate()
+    #um0r.change_scales(1)
+    Omega = (u@ephi)/rscalar
+    Omegam0r = d3.Average(Omega, coords['phi']).evaluate()
+    
+    uphi.change_scales(dealias)
+    Omegam0r.change_scales(dealias)
+    uphi['g'] = Omegam0r['g'] * r_deal
+    #uphi.change_scales(1)
+    um0[w, :] = np.copy(uphi['g'])
+    if w % 10 == 0:
+        print(w, nw)
+    #um0[w, :] = np.copy(um0r['g'])
 
 # take time averages
 if (t_start is not None) and (t_end is not None):
@@ -119,7 +136,6 @@ drvortm0_tavg = np.mean(drvortm0[tstartidx:tendidx, :], axis = 0)
 drpvortm0_tavg = np.mean(drpvortm0[tstartidx:tendidx, :], axis = 0)
 dr2pvortm0_tavg = np.mean(dr2pvortm0[tstartidx:tendidx, :], axis = 0)
 
-
 processed = {}
 
 processed['nw'] = nw
@@ -127,8 +143,10 @@ processed['ws'] = ws
 processed['tw'] = tw
 
 processed['r'] = np.array(f1['tasks/vortm0'].dims[2][0])
-processed['um0'] = um0
-processed['um0_tavg'] = um0_tavg
+#processed['um0'] = um0
+#processed['um0_tavg'] = um0_tavg
+processed['Omegam0'] = Omegam0
+processed['Omegam0_tavg'] = Omegam0_tavg
 processed['vortm0'] = vortm0
 processed['vortm0_tavg'] = vortm0_tavg
 processed['pvortm0'] = pvortm0
