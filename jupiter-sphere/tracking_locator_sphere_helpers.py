@@ -6,6 +6,10 @@ pure (no side effects, no dependence on script-level globals); the main
 script imports what it needs from this file.
 
 Contents:
+  - open_snapshot_set          : open one or more Dedalus snapshot HDF5
+                                 files (single path or glob pattern),
+                                 sorted by trailing integer, and build
+                                 the global frame -> (file, local) maps
   - great_circle_distance      : angular distance between two sphere points
   - find_threshold_crossing    : smallest rho where |profile| crosses |target|
   - cpc_frame_to_lab           : rotate CPC-frame small-circle coords to lab
@@ -16,9 +20,77 @@ Contents:
                                  L-BFGS-B optimization
 """
 
+import glob
+import re
+import h5py
 import numpy as np
+from collections import namedtuple
 from scipy.interpolate import RectSphereBivariateSpline
 from scipy.optimize import minimize
+
+
+SnapshotSet = namedtuple('SnapshotSet',
+    ['files', 'vort_dsets', 't_all', 'file_idxs', 'local_idxs',
+     'Nphi_grid', 'Ntheta_grid'])
+
+
+def _trailing_int_key(path):
+    """Natural-sort key: extract integers from a path so 'snapshots_s10.h5'
+    sorts after 'snapshots_s2.h5'."""
+    nums = re.findall(r'\d+', path)
+    return [int(n) for n in nums] if nums else [0]
+
+
+def open_snapshot_set(file_str, vort_task):
+    """
+    Open one or more Dedalus snapshot HDF5 files and build everything the
+    main locator script needs to iterate over a unified global frame index.
+
+    `file_str` may be a single concrete path or a glob pattern matching
+    multiple set files (e.g., 'snapshots/snapshots_s*.h5').  Matched files
+    are sorted by their trailing integer and processed consecutively.
+
+    Returns a SnapshotSet namedtuple with fields:
+      files       - list of open h5py.File handles (caller closes)
+      vort_dsets  - list of per-file vorticity datasets
+      t_all       - concatenated sim_time array over all files
+      file_idxs   - global frame index -> which file
+      local_idxs  - global frame index -> write index within that file
+      Nphi_grid   - phi resolution (verified consistent across files)
+      Ntheta_grid - theta resolution (verified consistent across files)
+    """
+    file_paths = sorted(glob.glob(file_str), key=_trailing_int_key)
+    if len(file_paths) == 0:
+        raise FileNotFoundError(f"No files matched: {file_str}")
+
+    files      = [h5py.File(p, 'r') for p in file_paths]
+    vort_dsets = []
+    sim_times_per_file = []
+    for fh, p in zip(files, file_paths):
+        if f"tasks/{vort_task}" not in fh:
+            available = list(fh.get('tasks', {}).keys())
+            raise KeyError(f"Task '{vort_task}' not in {p}. "
+                           f"Available: {available}")
+        dset = fh[f'tasks/{vort_task}']
+        vort_dsets.append(dset)
+        sim_times_per_file.append(dset.dims[0]['sim_time'][:])
+
+    # verify all files share spatial shape; t-axis is allowed to differ
+    Nphi_grid, Ntheta_grid = vort_dsets[0].shape[1], vort_dsets[0].shape[2]
+    for dset, p in zip(vort_dsets[1:], file_paths[1:]):
+        if dset.shape[1:] != (Nphi_grid, Ntheta_grid):
+            raise ValueError(f"Spatial shape mismatch in {p}: "
+                             f"got {dset.shape[1:]}, expected "
+                             f"({Nphi_grid}, {Ntheta_grid})")
+
+    t_all      = np.concatenate(sim_times_per_file)
+    file_idxs  = np.concatenate([np.full(len(t), k, dtype=int)
+                                  for k, t in enumerate(sim_times_per_file)])
+    local_idxs = np.concatenate([np.arange(len(t), dtype=int)
+                                  for t in sim_times_per_file])
+
+    return SnapshotSet(files, vort_dsets, t_all, file_idxs, local_idxs,
+                        Nphi_grid, Ntheta_grid)
 
 
 def great_circle_distance(theta1, phi1, theta2, phi2):
@@ -127,7 +199,7 @@ def refine_extremum_via_spline(theta_1d, phi_1d, vort_field,
     Ntheta = len(theta_1d)
     dphi   = 2 * np.pi / Nphi
 
-    # Sign of the extremum we're tracking.  L-BFGS-B is a minimizer, so
+    # Sign of the extremum we're tracking. L-BFGS-B is a minimizer, so
     # we minimize -sign * spl to find the extremum of the right sign.
     grid_val = float(vort_field[phi_idx, theta_idx])
     sign = 1.0 if grid_val >= 0 else -1.0
@@ -138,27 +210,18 @@ def refine_extremum_via_spline(theta_1d, phi_1d, vort_field,
     th_hi = min(Ntheta - 1, theta_idx + local_size_theta)
     theta_local = theta_1d[th_lo:th_hi + 1]
 
-    # Local phi indices with wrap-around (e.g., near phi=0 the window
-    # straddles both ends of the array).  The corresponding phi values
-    # are centered on the candidate (candidate at phi=0 in this frame),
-    # which is a strictly monotonic sequence in [-pi, pi] and avoids any
-    # wrap-around discontinuity in the spline's phi axis.
-    raw_phi_idxs       = np.arange(phi_idx - local_size_phi,
-                                    phi_idx + local_size_phi + 1)
-    phi_idxs_local     = raw_phi_idxs % Nphi
-    phi_local_centered = (raw_phi_idxs - phi_idx) * dphi
+    # Local phi indices
+    raw_phi_idxs       = np.arange(phi_idx - local_size_phi, phi_idx + local_size_phi + 1)
+    phi_idxs_local     = raw_phi_idxs % Nphi # for indexing Dedalus field
+    phi_local_centered = (raw_phi_idxs - phi_idx) * dphi # for spline fit (centers candidate far from the -pi, pi discontinuity)
 
-    # Extract the local data block.  np.ix_ gives a (n_phi_local,
-    # n_theta_local) result, which we transpose to (theta, phi) order for
-    # RectSphereBivariateSpline.
-    data_block = vort_field[np.ix_(phi_idxs_local,
-                                     np.arange(th_lo, th_hi + 1))]
+    # Extract the local data block from Dedalus field 
+    # which we transpose to (theta, phi) order for RectSphereBivariateSpline.
+    # (Note: np.ix_ gives a mesh of indices of shape (n_phi_local, n_theta_local))
+    data_block = vort_field[np.ix_(phi_idxs_local, np.arange(th_lo, th_hi + 1))]
     data_for_spline = data_block.T  # (n_theta_local, n_phi_local)
 
-    # Build the spherical-aware spline.  pole_continuity=True is safe even
-    # when the window doesn't touch a pole (the condition only applies
-    # at u=0 / u=pi, which the local optimizer does not query unless they
-    # are inside the window's bounds).
+    # Build spline -- pole_continuity=True is safe even when the window doesn't touch a pole 
     spl = RectSphereBivariateSpline(
         theta_local, phi_local_centered, data_for_spline,
         pole_continuity=True,
@@ -173,11 +236,15 @@ def refine_extremum_via_spline(theta_1d, phi_1d, vort_field,
         dph = float(spl(x[0], x[1], dphi=1).ravel()[0])
         return np.array([-sign * dth, -sign * dph])
 
+    # bounds
     theta_bounds = (float(theta_local[0]), float(theta_local[-1]))
     phi_bounds   = (float(phi_local_centered[0]),
                     float(phi_local_centered[-1]))
 
+    # initial guess
     x0 = [float(theta_1d[theta_idx]), 0.0]
+
+    # call minimizer
     res = minimize(neg_signed_val, x0, jac=neg_signed_jac,
                     method='L-BFGS-B',
                     bounds=[theta_bounds, phi_bounds], tol=opt_tol)

@@ -9,12 +9,16 @@ from mpi4py import MPI
 rank = MPI.COMM_WORLD.rank
 size = MPI.COMM_WORLD.Get_size()
 
+# Restart flag
+restart = False # make this True if you are restarting from a checkpoint!
+#restart_path = 'checkpoints/checkpoints_s46.h5' # uncomment this and provide a path to the checkpoint you want to restart from
+
 # Domain parameters
 mesh = None
 dtype = np.float64
 dealias = 3 / 2
-Nphi = 2048
-Ntheta = 1024
+Nphi = 256
+Ntheta = 128
 R = 1
 
 # Simulation units
@@ -111,17 +115,15 @@ stop_sim_time = 5/alpha
 solver = problem.build_solver(timestepper)
 solver.stop_sim_time = stop_sim_time
 
-#restart = True #False # set to False when not starting from t=0
-#write, initial_timestep = solver.load_state('snapshots/snapshots_s46.h5', allow_missing=True)
-#write, initial_timestep = solver.load_state('snapshots/snapshots_s158.h5', allow_missing=True)
-
-restart = False
-
 # Overwrite any pre-existing analysis folders in this directory unless restarting from a checkpoint -- then append
 if restart:
     file_handler_mode = 'append'
+    # load the checkpoint
+    write, initial_timestep = solver.load_state(restart_path, allow_missing=True) # allow_missing=True if you are loading from a file that doesn't include the full solver.state
+    init_dt = initial_timestep
 else:
     file_handler_mode = 'overwrite'
+    init_dt = 0.1*max_dt
 
 # Checkpoints
 checkpoints = solver.evaluator.add_file_handler('checkpoints', sim_dt = checkpoints_dt, max_writes = 1, mode=file_handler_mode)
